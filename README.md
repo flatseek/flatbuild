@@ -41,7 +41,7 @@ from random initialization using a modular, configuration-driven pipeline.
 
 The repository includes a small conversational dataset that demonstrates the complete Flatbuild workflow—from dataset to training, export, and inference.
 
-Example dataset (`data/demo_large/dataset.jsonl`):
+Example dataset (`data/demo/dataset.jsonl`):
 
 ```json
 {"messages":[{"role":"system","content":"You are Flatbot, a helpful, friendly, and concise conversational assistant."},{"role":"user","content":"What gas do plants absorb?"},{"role":"assistant","content":"Plants absorb carbon dioxide from the atmosphere."}]}
@@ -50,14 +50,14 @@ Example dataset (`data/demo_large/dataset.jsonl`):
 Train the model:
 
 ```bash
-flatbuild train configs/demo_large.yaml
+flatbuild train configs/demo.yaml
 ```
 
 Example output:
 
 ```text
-Loaded config: configs/demo_large.yaml
-Project: demo-large
+Loaded config: configs/demo.yaml
+Project: demo
 Loaded 1000 samples
 Train: 850  Validation: 150
 
@@ -69,14 +69,14 @@ Epoch 4/4  loss=1.9804  val_loss=2.8162  ppl=16.71   acc=54.2%
 Run completed.
 
 Artifacts:
-outputs/demo-large/20260802T014922Z
+outputs/demo/20260802T014922Z
 ```
 
 Export the trained checkpoint:
 
 ```bash
 flatbuild export \
-    outputs/demo-large/20260802T014922Z/checkpoints/final \
+    outputs/demo/20260802T014922Z/checkpoints/final \
     --format safetensors
 ```
 
@@ -84,7 +84,7 @@ flatbuild export \
 Wrote model.safetensors
 Copied tokenizer files
 
-outputs/demo-large/20260802T014922Z/checkpoints/export_safetensors
+outputs/demo/20260802T014922Z/checkpoints/export_safetensors
 ```
 
 Run the exported model with **[Flatrun](https://github.com/flatseek/flatrun)**.
