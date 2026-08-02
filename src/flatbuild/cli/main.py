@@ -233,12 +233,15 @@ def train(config_file: str, profile: bool) -> None:
 
     tok_dir = run_dir / "tokenizer"
     if cfg.tokenizer.source == TokenizerSource.TRAIN:
+        from flatbuild.tokenizers.template import build_chat_template, to_flatrun_jinja
+
         tok = BPETokenizer.train(
             (s.text if hasattr(s, "text") else _render_for_bpe(s, cfg) for s in splits.train),
             vocab_size=cfg.tokenizer.vocab_size,
             min_frequency=cfg.tokenizer.min_frequency,
             added_tokens=cfg.tokenizer.added_tokens,
             save_to=tok_dir,
+            chat_template=to_flatrun_jinja(build_chat_template(cfg.chat_template)),
         )
     else:
         if not cfg.tokenizer.path:
@@ -398,7 +401,36 @@ def evaluate(checkpoint: str, config_file: Optional[str]) -> None:
     show_default=True,
 )
 @click.option("--output", "output_dir", type=click.Path(), default=None)
-def export(checkpoint: str, fmt: str, output_dir: Optional[str]) -> None:
+@click.option(
+    "--quant",
+    "quant",
+    type=str,
+    default=None,
+    help="GGUF quantization: f16 (default), f32, q4_0, q4_1, q5_0, q8_0, "
+    "q2_k, q3_k, q4_k, q5_k, q6_k, q8_k. Only applies to --format gguf.",
+)
+@click.option(
+    "--publisher",
+    "publisher",
+    type=str,
+    default=None,
+    help="GGUF publisher/org metadata (general.publisher). GGUf only.",
+)
+@click.option(
+    "--name",
+    "model_name",
+    type=str,
+    default=None,
+    help="GGUF model name (general.name). Overrides config. GGUF only.",
+)
+def export(
+    checkpoint: str,
+    fmt: str,
+    output_dir: Optional[str],
+    quant: Optional[str],
+    publisher: Optional[str],
+    model_name: Optional[str],
+) -> None:
     """Export a checkpoint to SafeTensors, HuggingFace, GGUF, or Flatweight (.fwg) format.
 
     The ``gguf`` format requires ``pip install -e '.[gguf]'``; the ``fwg``
@@ -427,6 +459,13 @@ def export(checkpoint: str, fmt: str, output_dir: Optional[str]) -> None:
         raise click.ClickException(f"Unknown export format: {fmt}")
 
     cfg_export = cfg.export
+    # Override export options from the CLI when provided.
+    if quant is not None:
+        setattr(cfg_export, "quant", quant)
+    if publisher is not None:
+        setattr(cfg_export, "publisher", publisher)
+    if model_name is not None:
+        setattr(cfg_export, "model_name", model_name)
     # If the saved config didn't carry a tokenizer_path, point at the one
     # that was saved inside the checkpoint.
     if tok is not None:

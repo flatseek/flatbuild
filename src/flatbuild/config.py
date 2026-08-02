@@ -271,6 +271,9 @@ class ExportConfig:
 
     format: ExportFormat = ExportFormat.SAFETENSORS
     output_dir: str | None = None
+    quant: str = "f16"
+    publisher: str | None = None
+    model_name: str | None = None
 
     def to_dict(self) -> dict:
         data = asdict(self)

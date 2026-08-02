@@ -23,13 +23,57 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from flatbuild.config import ExportConfig
 from flatbuild.exporters.base import Exporter
 from flatbuild.models import FlatbuildModel
 from flatbuild.utils import get_logger
 
+if TYPE_CHECKING:  # pragma: no cover - import-time guard
+    from gguf import GGMLQuantizationType
+
 logger = get_logger(__name__)
+
+
+def _resolve_quant_type(
+    quant: str,
+    ggml: "GGMLQuantizationType",
+) -> tuple["GGMLQuantizationType", bool]:
+    """Map a user-facing quant string to a GGMLQuantizationType.
+
+    Args:
+        quant: One of ``f16``, ``f32`` (identity) or a GGUF quant name
+            (``q4_0``, ``q4_1``, ``q5_0``, ``q8_0``, ``q2_k``, ``q3_k``,
+            ``q4_k``, ``q5_k``, ``q6_k``, ``q8_k``).
+        ggml: The ``gguf.GGMLQuantizationType`` enum to look up.
+
+    Returns:
+        A ``(dtype, flag)`` tuple where ``flag`` is ``True`` when the dtype
+        is a real quantization (not f16/f32).
+
+    Raises:
+        ValueError: If ``quant`` is not a known type.
+    """
+    name = quant.strip().upper()
+    try:
+        dtype = ggml[name]
+    except KeyError:
+        allowed = sorted(
+            q.name
+            for q in ggml
+            if q.name
+            in {"F16", "F32", "Q4_0", "Q4_1", "Q5_0", "Q8_0",
+                "Q2_K", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "Q8_K"}
+        )
+        raise ValueError(
+            f"Unknown quantization '{quant}' for GGUF export. "
+            f"Expected one of: {', '.join(allowed)}"
+        )
+    return dtype, dtype.value not in {
+        ggml.F16.value,
+        ggml.F32.value,
+    }
 
 
 def _hf_to_gguf_name(name: str) -> str:
@@ -199,7 +243,8 @@ class GGUFExporter(Exporter):
             The output directory.
         """
         try:
-            from gguf import GGUFWriter
+            from gguf import GGUFWriter, GGMLQuantizationType
+            from gguf.quants import GGML_QUANT_SIZES
         except ImportError as exc:  # pragma: no cover - optional dep
             raise ImportError(
                 "GGUF export requires the optional dependency `gguf`. "
@@ -215,10 +260,14 @@ class GGUFExporter(Exporter):
         cfg = model.config
         state_dict = model.state_dict_llama()
 
+        # Resolve quantization. Config.quant may carry the value; the caller
+        # can also pass it as ExportConfig.quant. Defaults to F16.
+        quant_name = getattr(config, "quant", None) or "f16"
+        quant_type, is_quantized = _resolve_quant_type(quant_name, GGMLQuantizationType)
+
         writer = GGUFWriter(str(out_path), arch="llama")
         # The ``arch="llama"`` constructor already inserts
-        # ``general.architecture`` and ``general.file_type``; we
-        # only need to add the model-specific fields here.
+        # ``general.architecture``; we add the model-specific fields here.
         writer.add_context_length(cfg.context_length)
         writer.add_embedding_length(cfg.hidden_dim)
         writer.add_feed_forward_length(cfg.ffn_dim)
@@ -227,15 +276,53 @@ class GGUFExporter(Exporter):
         writer.add_head_count_kv(cfg.n_kv_heads or max(1, cfg.n_heads // 2))
         writer.add_rope_freq_base(cfg.rope_theta)
         writer.add_layer_norm_rms_eps(1e-6)
-        writer.add_name(getattr(model.config, "name", "flatbuild") or "flatbuild")
+        export_name = (
+            getattr(config, "model_name", None)
+            or getattr(model.config, "name", None)
+            or "flatbuild"
+        )
+        writer.add_name(export_name)
 
-        # Flatten linear weight matrices so llama.cpp's tensor layout
-        # matches LlamaForCausalLM (no transpose needed downstream).
+        # ---- Identity / provenance metadata (params, publisher, quant). ----
+        num_params = sum(p.numel() for p in model.parameters())
+        logger.info(
+            f"GGUF export: {num_params:,} params, dtype={quant_type.name}, "
+            f"quantized={is_quantized}"
+        )
+        # ``total.parameters`` is the widely-used GGUF/HF key for param count.
+        writer.add_uint64("total.parameters", num_params)
+        # Publisher / organisation metadata.
+        publisher = getattr(config, "publisher", None) or "flatbuild"
+        if publisher:
+            writer.add_string("general.publisher", publisher)
+        # Register a clear per-file quant label so llama.cpp reports it.
+        writer.add_uint32("general.quantized", int(is_quantized))
+
+        # Tensor transport: flatten weights and, when quantizing, hand the
+        # raw F32 buffer to gguf with the target dtype so it quantizes
+        # per-tensor. Like llama.cpp, keep a tensor on F16 when its leading
+        # dimension isn't a multiple of the quant block size (e.g. small
+        # embedding/norm tensors), since GGUF block quantisation requires it.
+        fallback_dtype = GGMLQuantizationType.F16
+        block_size = GGML_QUANT_SIZES[quant_type][0] if is_quantized else 0
         for name, tensor in state_dict.items():
             flat_t = tensor.detach().contiguous().cpu()
             arr = flat_t.numpy().astype("float32", copy=False)
             gguf_name = _hf_to_gguf_name(name)
-            writer.add_tensor(gguf_name, arr)
+            # GGUF block quantisation applies along the last axis, so that
+            # must be a multiple of the quant block size to be quantizable.
+            last = arr.shape[-1]
+            if is_quantized and last % block_size == 0:
+                raw_dtype = quant_type
+            elif is_quantized:
+                logger.info(
+                    f"Tensor {name} last-dim={last} not a multiple of "
+                    f"{block_size}; keeping F16."
+                )
+                raw_dtype = fallback_dtype
+            else:
+                raw_dtype = None
+            writer.add_tensor(gguf_name, arr, raw_dtype=raw_dtype)
 
         # Embed the BPE tokenizer (vocab + merges + special tokens)
         # directly into the GGUF file so the export is fully

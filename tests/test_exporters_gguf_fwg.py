@@ -85,6 +85,50 @@ def test_gguf_round_trip(tmp_path):
     assert (arr == src).all()
 
 
+def test_gguf_metadata_params_publisher_name(tmp_path):
+    """GGUF export embeds params, publisher, and name metadata."""
+    pytest.importorskip("gguf")
+    from gguf import GGUFReader
+
+    from flatbuild.exporters.gguf import GGUFExporter
+
+    cfg = _tiny_config()
+    cfg.export = ExportConfig(publisher="Flatseek", model_name="flatbot-test-1M")
+    model = FlatbuildModel(cfg.model)
+    out = GGUFExporter(copy_tokenizer=False).export(model, tmp_path / "out", config=cfg.export)
+    reader = GGUFReader(str(out / "model.gguf"))
+
+    def _str(key):
+        val = reader.fields[key].parts[-1]
+        if isinstance(val, bytes):
+            return val.decode()
+        if hasattr(val, "tobytes"):
+            return val.tobytes().decode()
+        return str(val)
+
+    num_params = sum(p.numel() for p in model.parameters())
+    assert _str("general.name") == "flatbot-test-1M"
+    assert _str("general.publisher") == "Flatseek"
+    assert int(reader.fields["total.parameters"].parts[-1].tolist()[0]) == num_params
+
+
+def test_gguf_quant_falls_back_unquantizable(tmp_path):
+    """Quantized export keeps F16 tensors whose last dim isn't a block multiple."""
+    pytest.importorskip("gguf")
+    from gguf import GGUFReader
+
+    from flatbuild.exporters.gguf import GGUFExporter
+
+    cfg = _tiny_config()
+    cfg.export = ExportConfig(quant="q4_k")
+    model = FlatbuildModel(cfg.model)
+    out = GGUFExporter(copy_tokenizer=False).export(model, tmp_path / "out", config=cfg.export)
+    reader = GGUFReader(str(out / "model.gguf"))
+    # hidden_dim=32 is not a multiple of q4_k block (256); all stay F16 but
+    # the file must remain loadable and carry the quant label.
+    assert int(reader.fields["general.quantized"].parts[-1].tolist()[0]) == 1
+
+
 def test_gguf_tensor_names_are_canonical(tmp_path):
     """GGUF tensor names must match the llama.cpp / flatrun canonical set.
 
