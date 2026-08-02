@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Tuple
 
 import torch
 from torch import nn
@@ -166,6 +165,7 @@ class FlatbuildModel(nn.Module):
         top_p: float = 0.95,
         do_sample: bool = True,
         eos_token_id: int | None = None,
+        use_cache: bool = True,
     ) -> torch.Tensor:
         """Greedy / sampling autoregressive generation.
 
@@ -177,6 +177,9 @@ class FlatbuildModel(nn.Module):
             top_p: Nucleus filter. ``1.0`` disables.
             do_sample: ``True`` to sample; ``False`` for greedy.
             eos_token_id: When generated, stop early.
+            use_cache: When ``True`` (default) reuse the KV cache between
+                steps; when ``False`` recompute the full sequence each
+                step (reference path for validating the cache).
 
         Returns:
             Tensor of shape ``(1, T_prompt + T_new)``.
@@ -184,21 +187,21 @@ class FlatbuildModel(nn.Module):
         was_training = self.training
         self.eval()
         try:
-            device = input_ids.device
             generated = input_ids
             past_kv: list[tuple[torch.Tensor, torch.Tensor]] | None = None
             for _ in range(max_new_tokens):
-                if past_kv is None:
-                    input_step = generated
-                else:
+                if use_cache and past_kv is not None:
                     input_step = generated[:, -1:]
+                else:
+                    input_step = generated
                 with torch.no_grad():
                     out = self.forward(
                         input_step,
-                        past_kv=past_kv,
+                        past_kv=past_kv if use_cache else None,
                     )
                 logits = out.logits[:, -1, :]
-                past_kv = out.present_kv
+                if use_cache:
+                    past_kv = out.present_kv
                 if do_sample:
                     logits = logits / max(1e-6, temperature)
                     if top_k and top_k > 0:
@@ -290,6 +293,13 @@ class FlatbuildModel(nn.Module):
     def load_state_dict_llama(self, state_dict: dict[str, torch.Tensor], strict: bool = True):
         """Load Llama-style weights into this model.
 
+        This is the exact inverse of :meth:`state_dict_llama`: every
+        external key is remapped onto the model's internal parameter
+        names before calling :meth:`torch.nn.Module.load_state_dict`.
+        A key mismatch here would silently drop the layer weights (the
+        previous behaviour), leaving the freshly-initialized random
+        layers in place — a loaded model that generates garbage.
+
         Args:
             state_dict: Llama-keyed weight dict.
             strict: When ``True`` (default), require exact key match.
@@ -299,21 +309,28 @@ class FlatbuildModel(nn.Module):
         """
         renamed: dict[str, torch.Tensor] = {}
         for key, value in state_dict.items():
-            # Strip the ``model.`` prefix when matching internal layers.
             if key.startswith("model.layers."):
-                # Keep the full key — block layer hooks accept this.
-                renamed[key] = value
+                # ``model.layers.{i}.self_attn.{q,k,v,o}_proj.weight`` →
+                # ``layers.{i}.attn.{q,k,v,o}_proj.weight``
+                layer_idx, inner = key[len("model.layers."):].split(".", 1)
+                if inner.startswith("self_attn."):
+                    inner = "attn." + inner[len("self_attn."):]
+                elif inner == "input_layernorm.weight":
+                    inner = "norm_1.weight"
+                elif inner == "post_attention_layernorm.weight":
+                    inner = "norm_2.weight"
+                renamed[f"layers.{layer_idx}.{inner}"] = value
+            elif key == "model.embed_tokens.weight":
+                renamed["embed_tokens.weight"] = value
+            elif key == "model.norm.weight":
+                renamed["norm.weight"] = value
             else:
+                # ``lm_head.weight`` and already-internal keys pass through.
                 renamed[key] = value
-        # Final norm + lm_head → our ``norm`` and ``lm_head``.
-        if "model.norm.weight" in renamed:
-            renamed["norm.weight"] = renamed.pop("model.norm.weight")
-        if "lm_head.weight" in renamed:
-            renamed["lm_head.weight"] = renamed.pop("lm_head.weight")
-        # Stitch the embed/lm_head tied tensor into both.
-        embed = renamed.get("model.embed_tokens.weight")
+        # Stitch the embed/lm_head tied tensor into both (when tied).
+        embed = renamed.get("embed_tokens.weight")
         if embed is None:
-            embed = renamed.get("embed_tokens.weight")
+            embed = renamed.get("model.embed_tokens.weight")
         if embed is not None and self.config.tie_embeddings:
             renamed["lm_head.weight"] = embed
         return self.load_state_dict(renamed, strict=strict)

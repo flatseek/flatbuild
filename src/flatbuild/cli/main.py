@@ -21,7 +21,7 @@ import click
 
 from flatbuild import __version__
 from flatbuild.checkpoint.manager import CheckpointManager, CheckpointState
-from flatbuild.config import ExportFormat, FlatBuildConfig
+from flatbuild.config import FlatBuildConfig
 from flatbuild.exporters.huggingface import HuggingFaceExporter
 from flatbuild.exporters.safetensors import SafeTensorsExporter
 from flatbuild.models import FlatbuildModel
@@ -54,6 +54,107 @@ def _load_checkpoint_bundle(path: Path) -> tuple[FlatbuildModel, FlatBuildConfig
     if bundle["tokenizer_dir"] is not None:
         tok = BPETokenizer.load(bundle["tokenizer_dir"])
     return model, cfg, bundle["state"], tok
+
+
+def _log_checkpoint_diagnostics(
+    model: "FlatbuildModel",
+    cfg: FlatBuildConfig,
+    tok: BPETokenizer,
+) -> None:
+    """Log model/tokenizer integrity right after loading a checkpoint.
+
+    Verifies vocab alignment and that tied embeddings survived the
+    save→load round-trip (``embedding.weight == lm_head.weight``).
+    """
+    logger.info("Checkpoint diagnostics:")
+    logger.info(f"  model.vocab_size    = {cfg.model.vocab_size}")
+    logger.info(f"  model.hidden_dim    = {cfg.model.hidden_dim}")
+    logger.info(f"  model.n_layers      = {cfg.model.n_layers}")
+    logger.info(f"  model.n_heads       = {cfg.model.n_heads}")
+    logger.info(f"  model.tie_embeddings= {cfg.model.tie_embeddings}")
+    logger.info(f"  tokenizer.vocab_size= {tok.vocab_size}")
+    logger.info(f"  eos_token_id        = {tok.eos_token_id}")
+    logger.info(f"  bos_token_id        = {tok.bos_token_id}")
+    logger.info(f"  pad_token_id        = {tok.pad_token_id}")
+
+    import torch
+
+    embed = model.embed_tokens.weight
+    head = model.lm_head.weight
+    tied = bool((embed is head) or torch.equal(embed.data, head.data))
+    logger.info(f"  tied embedding == lm_head : {tied}")
+    if cfg.model.tie_embeddings and not tied:
+        logger.error(
+            "TIED-EMBEDDING INVARIANT BROKEN after loading checkpoint — "
+            "lm_head.weight != embed_tokens.weight"
+        )
+
+    if tok.vocab_size != cfg.model.vocab_size:
+        logger.warning(
+            f"Vocab mismatch: model.vocab_size={cfg.model.vocab_size} != "
+            f"tokenizer.vocab_size={tok.vocab_size}"
+        )
+
+
+def _log_chat_template_roundtrip(
+    tmpl,
+    tok: BPETokenizer,
+    render_messages: list[tuple[str, str]],
+    rendered: str,
+    cfg: FlatBuildConfig,
+) -> None:
+    """Compare the inference rendering against the training path's bytes.
+
+    ``tokenize_sample`` (training) and ``ChatTemplate.render``
+    (inference ``--chat``) must produce byte-identical streams for the
+    shared prefix of the conversation.
+    """
+    from flatbuild.datasets.base import ConversationSample
+    from flatbuild.trainer.tokenize import tokenize_sample
+
+    logger.info("Chat-template rendering check:")
+    # A real training sample always has an assistant turn; append a
+    # placeholder so tokenize_sample renders the ``<|assistant|>\n``
+    # cue too. The placeholder only affects tokens *after* the
+    # generation-prompt prefix, so the prefix comparison stays valid.
+    messages = list(render_messages)
+    if not any(role == "assistant" for role, _ in messages):
+        messages.append(("assistant", "<placeholder>"))
+    train_ids, _ = tokenize_sample(
+        ConversationSample(messages=tuple(messages)),
+        tok,
+        tmpl,
+        max_length=cfg.dataset.max_length,
+    )
+    train_rendered = tok.decode(train_ids)
+    logger.info(f"  TRAIN      : {train_rendered!r}")
+    logger.info(f"  INFERENCE  : {rendered!r}")
+    infer_ids = tok.encode(rendered)
+    is_prefix = bool(infer_ids) and infer_ids == train_ids[: len(infer_ids)]
+    logger.info(f"  inference ids == training prefix : {is_prefix}")
+    if not is_prefix:
+        logger.warning(
+            "Inference prompt is NOT byte-aligned with the training stream."
+        )
+
+
+def _log_prompt_and_logits(
+    model: "FlatbuildModel",
+    tok: BPETokenizer,
+    ids: list[int],
+    device,
+) -> None:
+    """Log the rendered prompt tokens and the first-token top-k logits."""
+    import torch
+
+    logger.info(f"Prompt token ids ({len(ids)} tokens): {ids}")
+    logger.info("First-token top-10 logits:")
+    with torch.no_grad():
+        input_ids = torch.tensor([ids], dtype=torch.long, device=device)
+        logits = model(input_ids).logits[0, -1, :]
+        top_vals, top_ids = torch.topk(logits, k=min(10, logits.shape[-1]))
+    for logit, tid in zip(top_vals.tolist(), top_ids.tolist()):
+        logger.info(f"  {tid} -> {tok.decode([tid])!r} -> {logit:.4f}")
 
 
 def _inspect_fwg(path: Path) -> None:
@@ -348,6 +449,12 @@ def export(checkpoint: str, fmt: str, output_dir: Optional[str]) -> None:
 @click.option("--top-p", default=0.95, show_default=True)
 @click.option("--no-sample", "no_sample", is_flag=True, help="Use greedy decoding.")
 @click.option(
+    "--no-cache",
+    "no_cache",
+    is_flag=True,
+    help="Recompute the full sequence every step (disables the KV cache).",
+)
+@click.option(
     "--chat",
     "use_chat_template",
     is_flag=True,
@@ -361,6 +468,7 @@ def generate(
     top_k: int,
     top_p: float,
     no_sample: bool,
+    no_cache: bool,
     use_chat_template: bool,
 ) -> None:
     """Generate text from a checkpoint."""
@@ -373,6 +481,7 @@ def generate(
 
     model.eval()
     device = next(model.parameters()).device
+    _log_checkpoint_diagnostics(model, cfg, tok)
 
     if use_chat_template:
         from flatbuild.tokenizers.template import build_chat_template
@@ -385,11 +494,13 @@ def generate(
             render_messages.append(("system", cfg.chat_template.system))
         render_messages.append(("user", prompt))
         rendered = tmpl.render(render_messages, add_generation_prompt=True)
+        _log_chat_template_roundtrip(tmpl, tok, render_messages, rendered, cfg)
     else:
         rendered = prompt
 
     ids = tok.encode(rendered) or [tok.eos_token_id]
     input_ids = torch.tensor([ids], dtype=torch.long, device=device)
+    _log_prompt_and_logits(model, tok, ids, device)
     out = model.generate(
         input_ids,
         max_new_tokens=max_new_tokens,
@@ -398,6 +509,7 @@ def generate(
         top_p=top_p,
         do_sample=not no_sample,
         eos_token_id=tok.eos_token_id,
+        use_cache=not no_cache,
     )
     text = tok.decode([int(i) for i in out[0].tolist()])
     click.echo(text)
