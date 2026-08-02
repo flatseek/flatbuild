@@ -1,0 +1,110 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flatbuild"
+version = "0.1.0"
+description = "Train conversational language models from scratch."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+  { name = "Judotens Budiarto", email = "judotens@flatseek.io" }
+]
+
+keywords = [
+    "language-model",
+    "training",
+    "transformer",
+    "decoder-only",
+    "gqa",
+    "rope",
+    "swiglu",
+    "flatseek",
+]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "torch>=2.0.0",
+    "numpy>=1.26.0",
+    "pyyaml>=6.0",
+    "click>=8.1.0",
+    "tokenizers>=0.15.0",
+    "safetensors>=0.4.0",
+    "pyarrow>=14.0.0",
+    "datasets>=2.18.0",
+    "rich>=13.0.0",
+    "tqdm>=4.66.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.2.0",
+    "mypy>=1.8.0",
+]
+
+# Optional dependencies per export format. The "gguf" extra pulls in the
+# pure-Python GGUF writer; the "fwg" extra pulls in the sibling
+# "flatweight" package that owns the FWG (Weight Filesystem) format.
+# Install only the extra you need:
+#   pip install -e ".[gguf]"   # enables flatbuild export --format gguf
+#   pip install -e ".[fwg]"    # enables FWG export + FWG inspection
+gguf = [
+    "gguf>=0.13.0",
+]
+fwg = [
+    "flatweight>=0.1.0",
+]
+
+[project.urls]
+Homepage = "https://flatseek.io"
+Documentation = "https://flatseek.io/docs"
+Repository = "https://github.com/flatseek/flatbuild"
+Issues = "https://github.com/flatseek/flatbuild/issues"
+
+Flatseek = "https://github.com/flatseek/flatseek"
+Flatvec = "https://github.com/flatseek/flatvec"
+Flatask = "https://github.com/flatseek/flatask"
+Flatrun = "https://github.com/flatseek/flatrun"
+Flattune = "https://github.com/flatseek/flattune"
+
+[project.scripts]
+flatbuild = "flatbuild.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["flatbuild*"]
+
+[tool.setuptools.package-data]
+"flatbuild" = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "slow: long-running tests (overfit, large-dataset); skip via -m 'not slow'",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = false

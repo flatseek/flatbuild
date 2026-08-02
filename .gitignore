@@ -1,0 +1,36 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+
+# Outputs
+outputs/
+runs/
+logs/
+
+# Models / datasets
+*.pt
+*.bin
+*.safetensors
+*.npz
+
+# Coverage / test
+.coverage
+.pytest_cache/
+htmlcov/
+.tox/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store

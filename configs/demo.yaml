@@ -1,0 +1,94 @@
+name: demo
+description: >
+  Tiny conversational assistant optimized for very small datasets.
+  Trains a compact decoder-only Transformer that intentionally overfits
+  a small corpus to demonstrate the complete Flatbuild workflow.
+
+output_dir: outputs
+
+dataset:
+  format: jsonl
+  path: data/demo/dataset.jsonl
+  max_length: 256
+  train_split: 0.95
+  val_split: 0.05
+  test_split: 0.0
+  seed: 42
+  sample_type: conversation
+
+tokenizer:
+  source: train
+  vocab_size: 512
+  min_frequency: 1
+  added_tokens: []
+
+chat_template:
+  name: flatbuild-demo
+  system: You are Flatbot, a helpful and friendly conversational assistant.
+  user_prefix: "<|user|>\n"
+  assistant_prefix: "<|assistant|>\n"
+  end_of_turn: "<|endoftext|>"
+  separator: "\n\n"
+
+model:
+  vocab_size: 512
+  n_layers: 4
+  n_heads: 4
+  n_kv_heads: 2
+  hidden_dim: 128
+  ffn_dim: 512
+  context_length: 256
+  rope_theta: 10000.0
+  norm: rmsnorm
+  activation: swiglu
+  tie_embeddings: true
+  attention_dropout: 0.0
+  residual_dropout: 0.0
+  embedding_dropout: 0.0
+  initializer_range: 0.02
+
+optimizer:
+  type: adamw
+  lr: 1.0e-3
+  betas: [0.9, 0.99]
+  eps: 1.0e-8
+  weight_decay: 0.0
+
+scheduler:
+  type: cosine
+  warmup_steps: 5
+  min_lr_ratio: 0.05
+
+trainer:
+  epochs: 400
+  batch_size: 2
+  gradient_accumulation: 1
+  max_steps: null
+  precision: fp32
+  gradient_checkpointing: false
+  seed: 42
+  eval_every_n_steps: 20
+  log_every_n_steps: 5
+  max_grad_norm: 1.0
+  early_stopping:
+    enabled: false
+    patience: 5
+    min_delta: 0.0
+    monitor: val_loss
+
+checkpoint:
+  every_n_steps: 100
+  keep_last: 2
+  save_final: true
+  resume_from: null
+
+export:
+  format: safetensors
+
+generate:
+  prompt: Hello
+  max_new_tokens: 64
+  temperature: 0.2
+  top_p: 0.95
+  top_k: 20
+  do_sample: false
