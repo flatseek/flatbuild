@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import sys
-from pathlib import Path
-
 import pytest
 import torch
 
@@ -87,6 +83,50 @@ def test_gguf_round_trip(tmp_path):
     src = model.state_dict_llama()[pick_hf].cpu().numpy().astype("float32", copy=False)
     assert arr.shape == src.shape
     assert (arr == src).all()
+
+
+def test_gguf_tensor_names_are_canonical(tmp_path):
+    """GGUF tensor names must match the llama.cpp / flatrun canonical set.
+
+    Regression: ``self_attn.o_proj.weight`` was written as
+    ``blk.N.attn_o.weight``, but llama.cpp and flatrun both expect the
+    output projection under ``blk.N.attn_output.weight`` — flatrun's
+    GGUF reader leaves ``attn_o`` untranslated and the o_proj lookup
+    fails at the first decoder block.
+    """
+    pytest.importorskip("gguf")
+    from gguf import GGUFReader
+
+    from flatbuild.exporters.gguf import GGUFExporter
+
+    cfg = _tiny_config()
+    model = FlatbuildModel(cfg.model)
+    out = GGUFExporter(copy_tokenizer=False).export(model, tmp_path / "out")
+    reader = GGUFReader(str(out / "model.gguf"))
+    actual = {t.name for t in reader.tensors}
+
+    # Canonical llama.cpp names (see convert_hf_to_gguf.py / llama-arch).
+    canonical = {
+        "token_embd.weight",
+        "output_norm.weight",
+        "output.weight",
+        *{f"blk.{i}.attn_norm.weight" for i in range(cfg.model.n_layers)},
+        *{f"blk.{i}.attn_q.weight" for i in range(cfg.model.n_layers)},
+        *{f"blk.{i}.attn_k.weight" for i in range(cfg.model.n_layers)},
+        *{f"blk.{i}.attn_v.weight" for i in range(cfg.model.n_layers)},
+        *{f"blk.{i}.attn_output.weight" for i in range(cfg.model.n_layers)},
+        *{f"blk.{i}.ffn_norm.weight" for i in range(cfg.model.n_layers)},
+        *{f"blk.{i}.ffn_gate.weight" for i in range(cfg.model.n_layers)},
+        *{f"blk.{i}.ffn_up.weight" for i in range(cfg.model.n_layers)},
+        *{f"blk.{i}.ffn_down.weight" for i in range(cfg.model.n_layers)},
+    }
+    assert actual == canonical, (
+        f"GGUF tensor names are not canonical.\n"
+        f"  missing: {sorted(canonical - actual)}\n"
+        f"  extra:   {sorted(actual - canonical)}"
+    )
+    # The non-canonical alias must never appear.
+    assert not any(n.endswith("attn_o.weight") for n in actual)
 
 
 def test_gguf_tokenizer_attached_flat(tmp_path):

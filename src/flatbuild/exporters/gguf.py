@@ -21,7 +21,6 @@ output file is consumable by every standard GGUF tool.
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 from flatbuild.config import ExportConfig
@@ -63,7 +62,7 @@ def _hf_to_gguf_name(name: str) -> str:
         if tail == "self_attn.v_proj.weight":
             return head + "attn_v.weight"
         if tail == "self_attn.o_proj.weight":
-            return head + "attn_o.weight"
+            return head + "attn_output.weight"
         if tail == "input_layernorm.weight":
             return head + "attn_norm.weight"
         if tail == "post_attention_layernorm.weight":
