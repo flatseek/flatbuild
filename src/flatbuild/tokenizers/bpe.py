@@ -73,6 +73,7 @@ class BPETokenizer:
         min_frequency: int = 2,
         added_tokens: Iterable[str] | None = None,
         save_to: str | Path | None = None,
+        chat_template: str | None = None,
     ) -> "BPETokenizer":
         """Train a new BPE tokenizer on an iterable of texts.
 
@@ -82,6 +83,9 @@ class BPETokenizer:
             min_frequency: Minimum frequency for a token to be kept.
             added_tokens: Tokens to force into the vocabulary.
             save_to: If given, save the resulting tokenizer to this directory.
+            chat_template: Optional Jinja chat template to persist into
+                ``tokenizer_config.json`` so downstream runtimes (Flatrun,
+                HuggingFace) render prompts exactly like Flatbuild does.
 
         Returns:
             A trained :class:`BPETokenizer`.
@@ -124,7 +128,7 @@ class BPETokenizer:
 
         instance = cls(_inner=tokenizer)
         if save_to is not None:
-            instance.save(save_to)
+            instance.save(save_to, chat_template=chat_template)
         return instance
 
     @classmethod
@@ -186,8 +190,14 @@ class BPETokenizer:
     # Persistence
     # ------------------------------------------------------------------
 
-    def save(self, directory: str | Path) -> None:
+    def save(self, directory: str | Path, *, chat_template: str | None = None) -> None:
         """Persist the tokenizer to ``directory``.
+
+        Args:
+            directory: Destination directory.
+            chat_template: Optional Jinja chat template written into
+                ``tokenizer_config.json`` (consumed by Flatrun and
+                HuggingFace for prompt rendering).
 
         Writes the following files:
 
@@ -209,6 +219,8 @@ class BPETokenizer:
             "unk_token": self.unk_token,
             "vocab_size": self.vocab_size,
         }
+        if chat_template:
+            config["chat_template"] = chat_template
         with open(directory / "tokenizer_config.json", "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
         # Small manifest so external tools can discover the format.

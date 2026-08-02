@@ -41,25 +41,25 @@ from random initialization using a modular, configuration-driven pipeline.
 
 The repository includes a small conversational dataset that demonstrates the complete Flatbuild workflow—from dataset to training, export, and inference.
 
-Example dataset (`data/demo/dataset.jsonl`):
+Example dataset (`data/demo_chat/dataset.jsonl`):
 
 ```json
-{"messages":[{"role":"system","content":"You are Flatbot, a helpful, friendly, and concise conversational assistant."},{"role":"user","content":"What gas do plants absorb?"},{"role":"assistant","content":"Plants absorb carbon dioxide from the atmosphere."}]}
+{"messages":[{"role":"system","content":"You are Flatbot, a friendly conversational assistant. You help users understand things, solve problems, and have natural conversations. Be clear, helpful, and concise."},{"role":"user","content":"What gas do plants absorb?"},{"role":"assistant","content":"Plants absorb carbon dioxide from the atmosphere."}]}
 ```
 
 Train the model:
 
 ```bash
-flatbuild train configs/demo.yaml
+flatbuild train configs/demo_chat.yaml
 ```
 
 Example output:
 
 ```text
-Loaded config: configs/demo.yaml
-Project: demo
-Loaded 1000 samples
-Train: 850  Validation: 150
+Loaded config: configs/demo_chat.yaml
+Project: demo-chat
+Loaded 2500 conversations
+Train: 2375  Validation: 125
 
 Epoch 1/4  loss=4.9630  val_loss=5.2337  ppl=187.49  acc=36.4%
 Epoch 2/4  loss=4.2745  val_loss=4.0206  ppl=55.73   acc=46.3%
@@ -203,12 +203,12 @@ Training is controlled entirely through a YAML file.
 Example:
 
 ```yaml
-name: demo
+name: demo-chat
 
 dataset:
   type: conversation
-  path: data/demo/dataset.jsonl
-  max_length: 256
+  path: data/demo_chat/dataset.jsonl
+  max_length: 384
 
 tokenizer:
   source: train
@@ -230,7 +230,7 @@ trainer:
   batch_size: 8
 ```
 
-See `configs/demo.yaml` for the complete configuration.
+See `configs/demo_chat.yaml` for the complete configuration.
 
 ---
 
@@ -329,7 +329,7 @@ Future releases are planned to include:
 Train the bundled demo model:
 
 ```bash
-flatbuild train configs/demo.yaml
+flatbuild train configs/demo_chat.yaml
 ```
 
 A typical run will:

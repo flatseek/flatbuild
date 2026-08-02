@@ -7,7 +7,7 @@ replaceable module, driven by a single YAML configuration.
 
 from flatbuild.utils import get_logger, setup_logging
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __author__ = "Flatbuild Contributors"
 
 __all__ = [

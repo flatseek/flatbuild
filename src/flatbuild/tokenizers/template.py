@@ -156,6 +156,84 @@ def build_chat_template(cfg: ChatTemplateConfig) -> ChatTemplate:
     )
 
 
+def _jinja_str(s: str) -> str:
+    """Escape a string so it can live inside a single-quoted Python literal
+    embedded in a Jinja ``{{ ... }}`` expression (as evaluated by Flatrun's
+    restricted renderer)."""
+    return (
+        s.replace("\\", "\\\\")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("'", "\\'")
+    )
+
+
+def to_flatrun_jinja(template: ChatTemplate) -> str:
+    """Render ``template`` as a Jinja string Flatrun can execute.
+
+    Flatrun's bundled template renderer is a deliberately small subset of
+    Jinja: it supports ``for``/``if``/``else`` tags and ``{{ ... }}``
+    expressions, but *no* loop variables (so ``loop.index`` is out) and it
+    cannot scan past literal text when locating a matching ``endfor`` /
+    ``endif``. This generator therefore emits a template that:
+
+    - puts every byte of output inside ``{{ ... }}`` expressions (no
+      literal text between tags), and
+    - folds the inter-turn ``separator`` into the per-message fragment via
+      ``messages.index(message)`` so ``\n\n``-separated templates stay
+      byte-identical to :meth:`ChatTemplate.render`.
+
+    The empty assistant placeholder that Flatrun's chat REPL appends before
+    ``add_generation_prompt`` renders as nothing, so a turn prompt is
+    byte-identical to the training stream.
+
+    Args:
+        template: The Flatbuild chat template to translate.
+
+    Returns:
+        A Jinja chat-template string that reproduces :meth:`render` output
+        byte-for-byte when run through Flatrun's ``apply_chat_template``.
+    """
+    eot = _jinja_str(template.end_of_turn)
+    user_p = _jinja_str(template.user_prefix)
+    asst_p = _jinja_str(template.assistant_prefix)
+    sep = _jinja_str(template.separator)
+
+    # Per-message fragment: empty assistant -> '', system -> content+eot,
+    # user -> prefix+content, assistant -> prefix+content+eot.
+    frag_body = (
+        f"message['content'] + '{eot}' if message['role']=='system' "
+        f"else ('{user_p}' + message['content'] if message['role']=='user' "
+        f"else '{asst_p}' + message['content'] + '{eot}')"
+    )
+    empty_check = (
+        "('' if (message['role']=='assistant' and message['content']=='') "
+        "else "
+    )
+    if template.separator:
+        # ``messages.index(message)`` is position in the rendered list —
+        # the best available stand-in for ``loop.index`` in Flatrun's
+        # renderer. Duplicate (role, content) pairs resolve to the first
+        # occurrence, which is the documented best-effort limitation.
+        frag = (
+            empty_check
+            + f"('{sep}' if messages.index(message) > 0 else '') + ({frag_body}))"
+        )
+        gen_frag = f"('{sep}{asst_p}')"
+    else:
+        frag = empty_check + f"({frag_body}))"
+        gen_frag = f"('{asst_p}')"
+
+    return (
+        "{% for message in messages %}"
+        f"{{{{ {frag} }}}}"
+        "{% endfor %}"
+        "{% if add_generation_prompt %}"
+        f"{{{{ {gen_frag} }}}}"
+        "{% endif %}"
+    )
+
+
 def render_conversation(
     sample: Sample,
     template: ChatTemplate,
@@ -172,4 +250,5 @@ __all__ = [
     "ChatTemplate",
     "build_chat_template",
     "render_conversation",
+    "to_flatrun_jinja",
 ]
