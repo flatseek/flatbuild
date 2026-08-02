@@ -33,6 +33,8 @@ from flatbuild.utils import get_logger
 if TYPE_CHECKING:  # pragma: no cover - import-time guard
     from gguf import GGMLQuantizationType
 
+    import numpy as np
+
 logger = get_logger(__name__)
 
 
@@ -121,6 +123,34 @@ def _hf_to_gguf_name(name: str) -> str:
     return name  # pass through
 
 
+def _permute_qk(weights: "np.ndarray", n_head: int, n_head_kv: int) -> "np.ndarray":
+    """Permute attention Q/K weights for the GGUF ``llama`` architecture.
+
+    flatbuild trains with HuggingFace's ``rotate_half`` RoPE, which pairs
+    head dimensions ``i`` and ``i + head_dim/2`` (half-split / NEOX). The
+    GGUF ``llama`` arch tells ggml to apply NORM (consecutive-pair) RoPE,
+    which expects Q/K pre-permuted to interleaved layout — exactly what
+    llama.cpp's ``convert_hf_to_gguf.py`` does for the llama family.
+
+    Args:
+        weights: Q/K projection weight of shape ``(n_out, n_embd)``.
+        n_head: Number of query heads.
+        n_head_kv: Number of KV heads (GQA); permutation groups by the
+            KV head count so grouped heads align correctly.
+
+    Returns:
+        Permuted weights (same shape) in interleaved layout.
+    """
+    if n_head_kv is not None and n_head != n_head_kv:
+        n_head = n_head_kv
+    return (
+        weights.reshape(n_head, 2, weights.shape[0] // n_head // 2, weights.shape[1])
+        .swapaxes(1, 2)
+        .reshape(weights.shape)
+    )
+
+
+
 class GGUFExporter(Exporter):
     """Write a GGUF v3 file via ``gguf.GGUFWriter``."""
 
@@ -192,8 +222,27 @@ class GGUFExporter(Exporter):
                 except Exception:  # pragma: no cover - defensive
                     pass
 
-            # Token types (1 = NORMAL, 2 = CONTROL/CONTROLLED, 3 = BYTE).
-            # Mark all known special tokens as CONTROL.
+            # Chat template. Persist the Jinja string so single-file GGUF
+            # consumers (Flatrun ``--model file.gguf``, LM Studio) render
+            # prompts with the exact training format instead of a generic
+            # fallback (e.g. Qwen2 ChatML).
+            tokenizer_config = Path(tokenizer_dir) / "tokenizer_config.json"
+            if tokenizer_config.is_file():
+                try:
+                    with open(tokenizer_config, encoding="utf-8") as f:
+                        tc = json.load(f)
+                    chat_template = tc.get("chat_template")
+                    if isinstance(chat_template, str) and chat_template.strip():
+                        writer.add_string("tokenizer.chat_template", chat_template)
+                except Exception:  # pragma: no cover - defensive
+                    pass
+
+            # Token types (1 = NORMAL, 3 = CONTROL/SPECIAL, 4 = USER_DEFINED,
+            # 6 = BYTE) following the canonical GGML/llama.cpp convention.
+            # llama.cpp and flatrun treat CONTROL (3) and USER_DEFINED (4)
+            # as added/special tokens; marking eos/bos/unk/pad with anything
+            # else (e.g. UNKNOWN=2) makes runtimes BPE-split the special
+            # markers instead of emitting their single ids.
             special_ids = {
                 tok.bos_token_id,
                 tok.eos_token_id,
@@ -202,7 +251,7 @@ class GGUFExporter(Exporter):
             if tok.pad_token_id is not None:
                 special_ids.add(tok.pad_token_id)
             token_types = [
-                2 if i in special_ids else 1 for i in range(len(ordered_tokens))
+                3 if i in special_ids else 1 for i in range(len(ordered_tokens))
             ]
             try:
                 writer.add_token_types(token_types)
@@ -309,6 +358,13 @@ class GGUFExporter(Exporter):
             flat_t = tensor.detach().contiguous().cpu()
             arr = flat_t.numpy().astype("float32", copy=False)
             gguf_name = _hf_to_gguf_name(name)
+            if gguf_name.endswith(("attn_q.weight", "attn_k.weight")):
+                # HF-layout Q/K pair head dims as (i, i + head_dim/2);
+                # the llama arch expects interleaved layout. Apply the
+                # same permutation llama.cpp's convert_hf_to_gguf.py uses.
+                n_head = cfg.n_heads
+                n_head_kv = getattr(cfg, "n_kv_heads", n_head)
+                arr = _permute_qk(arr, n_head, n_head_kv)
             # GGUF block quantisation applies along the last axis, so that
             # must be a multiple of the quant block size to be quantizable.
             last = arr.shape[-1]
