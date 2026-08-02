@@ -21,6 +21,7 @@ output file is consumable by every standard GGUF tool.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from flatbuild.config import ExportConfig
@@ -131,15 +132,21 @@ class GGUFExporter(Exporter):
             if tok.pad_token_id is not None:
                 writer.add_pad_token_id(tok.pad_token_id)
 
-            # BPE merge rules. ``inner.model.get_merges()`` returns
-            # ``Merge(a, b)`` namedtuples; llama.cpp expects
-            # space-separated "A B" pairs.
-            try:
-                merges = inner.model.get_merges()
-                formatted = [f"{m.a} {m.b}" for m in merges]
-                writer.add_token_merges(formatted)
-            except Exception:  # pragma: no cover - non-BPE backend
-                pass
+            # BPE merge rules. Read directly from tokenizer.json since
+            # ``tokenizers`` 0.22.x does not expose merges via the public API.
+            # llama.cpp expects space-separated "A B" pairs.
+            num_merges = 0
+            tokenizer_json = Path(tokenizer_dir) / "tokenizer.json"
+            if tokenizer_json.is_file():
+                try:
+                    with open(tokenizer_json, encoding="utf-8") as f:
+                        tj = json.load(f)
+                    raw_merges = tj.get("model", {}).get("merges", [])
+                    formatted = [f"{a} {b}" for a, b in raw_merges]
+                    num_merges = len(formatted)
+                    writer.add_token_merges(formatted)
+                except Exception:  # pragma: no cover - defensive
+                    pass
 
             # Token types (1 = NORMAL, 2 = CONTROL/CONTROLLED, 3 = BYTE).
             # Mark all known special tokens as CONTROL.
@@ -160,7 +167,7 @@ class GGUFExporter(Exporter):
 
             logger.info(
                 f"Embedded BPE tokenizer ({len(ordered_tokens)} tokens, "
-                f"{len(formatted) if 'formatted' in locals() else 0} merges) into GGUF."
+                f"{num_merges} merges) into GGUF."
             )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning(f"Failed to embed tokenizer into GGUF: {exc}")
