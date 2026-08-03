@@ -39,21 +39,23 @@ from random initialization using a modular, configuration-driven pipeline.
 ---
 # See It In Action
 
-The repository includes a small conversational dataset that demonstrates the complete Flatbuild workflow—from dataset to training, export, and inference.
+Flatbuild includes everything required to train a language model from scratch—from conversational datasets and tokenizer training to checkpoint export and inference.
 
-Example dataset (`data/demo_chat/dataset.jsonl`):
+The repository includes a small conversational dataset (`data/demo_chat`) that demonstrates the complete workflow.
+
+Example conversation:
 
 ```json
 {"messages":[{"role":"system","content":"You are Flatbot, a friendly conversational assistant. You help users understand things, solve problems, and have natural conversations. Be clear, helpful, and concise."},{"role":"user","content":"What gas do plants absorb?"},{"role":"assistant","content":"Plants absorb carbon dioxide from the atmosphere."}]}
 ```
 
-Train the model:
+Train the demonstration model:
 
 ```bash
 flatbuild train configs/demo_chat.yaml
 ```
 
-Example output:
+Example training output:
 
 ```text
 Loaded config: configs/demo_chat.yaml
@@ -61,79 +63,61 @@ Project: demo-chat
 Loaded 2500 conversations
 Train: 2375  Validation: 125
 
-Epoch 1/4  loss=4.9630  val_loss=5.2337  ppl=187.49  acc=36.4%
-Epoch 2/4  loss=4.2745  val_loss=4.0206  ppl=55.73   acc=46.3%
-Epoch 3/4  loss=2.6530  val_loss=3.2722  ppl=26.37   acc=49.6%
-Epoch 4/4  loss=1.9804  val_loss=2.8162  ppl=16.71   acc=54.2%
+Epoch 1/12  loss=4.9630  val_loss=5.2337  ppl=187.49  acc=36.4%
+...
+Epoch 12/12 loss=0.8245  val_loss=1.4638  ppl=4.32    acc=72.8%
 
 Run completed.
 
 Artifacts:
-outputs/demo/20260802T014922Z
+outputs/demo-chat/20260802T014922Z
 ```
 
 Export the trained checkpoint:
 
 ```bash
 flatbuild export \
-    outputs/demo/20260802T014922Z/checkpoints/final \
-    --format safetensors
+    outputs/demo-chat/20260802T014922Z/checkpoints/final \
+    --format gguf
 ```
 
 ```text
-Wrote model.safetensors
-Copied tokenizer files
+Wrote model.gguf
 
-outputs/demo/20260802T014922Z/checkpoints/export_safetensors
+outputs/demo-chat/20260802T014922Z/checkpoints/export_gguf
 ```
 
-Run the exported model with **[Flatrun](https://github.com/flatseek/flatrun)**.
+The same training pipeline is used to produce **[Flatbot-micro-4M](https://huggingface.co/flatseek/flatbot-micro-4M)**, the official demonstration model of the Flatseek ecosystem.
+
+Run it directly with **[Flatrun](https://github.com/flatseek/flatrun)**:
+
 ```bash
 pip install flatrun
 ```
 
-Then run the exported checkpoint:
-
 ```bash
-flatrun \
-    --model outputs/demo-large/20260802T014922Z/checkpoints/export_safetensors \
-    --prompt "who are you?"
+flatrun chat \
+    --model flatbot-micro-4M.gguf \
+    --temp 0.2
 ```
 
-Example output:
+Example session:
 
 ```text
-Detected format: safetensors
-Tokenizer vocab: 2603
-Chat template: Qwen2 ChatML
-Loaded model in 0.01 s
+Detected format: gguf
+Building tokenizer from GGUF metadata (flatbot-micro-4M.gguf) ...
+Tokenizer vocab: 516
+Loaded model in 0.01 s; layers=6
 
-Prompt:
-who are you?
+You: Who are you?
 
-Generated:
-'I I I 1 1 1 Ocean classic...... c solar that that that'
+Assistant:
+Sure — I'm Flatbot — a small conversational assistant trained from scratch using Flatbuild.
 ```
 
-This tiny demonstration trains a decoder-only language model from scratch using **1,000 conversational examples** and showcases the complete Flat pipeline:
+**Flatbot-micro-4M** is a compact (~4M parameter) decoder-only transformer trained entirely from random initialization using Flatbuild. It exists as a reproducible end-to-end demonstration of the Flatseek ecosystem, showing how a modern conversational language model can be built—from dataset generation to deployment—without relying on pretrained weights.
 
-```text
-Conversation Dataset
-        │
-        ▼
- Flatbuild Training
-        │
-        ▼
-   Model Checkpoint
-        │
-        ▼
- SafeTensors Export
-        │
-        ▼
- Flatrun Inference
-```
-
-The bundled demo model is intentionally small and only trained for a few epochs, so the generated text is not expected to be meaningful. Its purpose is to demonstrate the complete end-to-end workflow. The same pipeline scales to larger datasets and larger language models without changing the training or deployment process.
+While the model is intentionally small and not intended to compete with large language models, the same training and export pipeline scales directly to larger datasets and larger transformer architectures.
 
 ---
 
