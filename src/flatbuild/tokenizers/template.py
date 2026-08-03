@@ -199,6 +199,20 @@ def to_flatrun_jinja(template: ChatTemplate) -> str:
     asst_p = _jinja_str(template.assistant_prefix)
     sep = _jinja_str(template.separator)
 
+    # When a default system prompt is configured, prepend it as the
+    # first turn whenever the caller omits a system message.  The
+    # guard uses only constructs supported by Flatrun's restricted
+    # Jinja subset (no loop variables, no set) and by full Jinja
+    # (LM Studio, llama.cpp).
+    injection = ""
+    if template.system:
+        sys_literal = _jinja_str(template.system + template.end_of_turn)
+        injection = (
+            "{% if messages and messages[0]['role'] != 'system' %}"
+            f"{{{{ '{sys_literal}' }}}}"
+            "{% endif %}"
+        )
+
     # Per-message fragment: empty assistant -> '', system -> content+eot,
     # user -> prefix+content, assistant -> prefix+content+eot.
     frag_body = (
@@ -225,7 +239,8 @@ def to_flatrun_jinja(template: ChatTemplate) -> str:
         gen_frag = f"('{asst_p}')"
 
     return (
-        "{% for message in messages %}"
+        injection
+        + "{% for message in messages %}"
         f"{{{{ {frag} }}}}"
         "{% endfor %}"
         "{% if add_generation_prompt %}"

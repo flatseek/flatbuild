@@ -466,6 +466,9 @@ def export(
         setattr(cfg_export, "publisher", publisher)
     if model_name is not None:
         setattr(cfg_export, "model_name", model_name)
+    # Propagate chat_template from the top-level config so the
+    # exporter can embed the system-prompt injection.
+    cfg_export.chat_template = cfg.chat_template
     # If the saved config didn't carry a tokenizer_path, point at the one
     # that was saved inside the checkpoint.
     if tok is not None:

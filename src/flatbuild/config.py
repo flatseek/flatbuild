@@ -274,6 +274,7 @@ class ExportConfig:
     quant: str = "f16"
     publisher: str | None = None
     model_name: str | None = None
+    chat_template: ChatTemplateConfig = field(default_factory=ChatTemplateConfig)
 
     def to_dict(self) -> dict:
         data = asdict(self)

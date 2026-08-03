@@ -14,6 +14,8 @@ from flatbuild.config import ExportConfig
 from flatbuild.exporters._tokenizer_copy import copy_tokenizer
 from flatbuild.exporters.base import Exporter
 from flatbuild.models import FlatbuildModel
+from flatbuild.tokenizers import build_chat_template
+from flatbuild.tokenizers.template import to_flatrun_jinja
 from flatbuild.utils import get_logger
 
 logger = get_logger(__name__)
@@ -110,3 +112,19 @@ class SafeTensorsExporter(Exporter):
         if src is None:
             return
         copy_tokenizer(src, output_dir)
+        # Patch tokenizer_config.json so the chat_template carries
+        # the system-prompt injection (default system when caller
+        # omits a system message).  This mirrors the GGUF exporter
+        # behaviour and keeps safetensors + GGUF consistent.
+        if config is not None and config.chat_template.system is not None:
+            tc_path = output_dir / "tokenizer_config.json"
+            if tc_path.is_file():
+                try:
+                    with open(tc_path, encoding="utf-8") as f:
+                        tc = json.load(f)
+                    tmpl = build_chat_template(config.chat_template)
+                    tc["chat_template"] = to_flatrun_jinja(tmpl)
+                    with open(tc_path, "w", encoding="utf-8") as f:
+                        json.dump(tc, f, indent=2)
+                except Exception:  # pragma: no cover - defensive
+                    pass

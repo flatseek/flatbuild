@@ -28,6 +28,8 @@ from typing import TYPE_CHECKING
 from flatbuild.config import ExportConfig
 from flatbuild.exporters.base import Exporter
 from flatbuild.models import FlatbuildModel
+from flatbuild.tokenizers import build_chat_template
+from flatbuild.tokenizers.template import to_flatrun_jinja
 from flatbuild.utils import get_logger
 
 if TYPE_CHECKING:  # pragma: no cover - import-time guard
@@ -167,16 +169,16 @@ class GGUFExporter(Exporter):
         self,
         writer,
         tokenizer_dir: str | Path | None,
+        config: ExportConfig | None = None,
     ) -> None:
         """Embed the BPE tokenizer into the GGUF file as metadata.
 
         Args:
-            writer: An open :class:`gguf.GGUFWriter`.
+            writer: GGUF writer.
             tokenizer_dir: Source directory containing the BPE
-                ``tokenizer.json`` saved by :class:`BPETokenizer.save`.
-                When ``None`` this is a no-op (flatrun will fall back
-                to the sidecar ``tokenizer/`` directory or the in-vocab
-                special tokens).
+                tokenizer files.
+            config: Optional export config — provides the chat
+                template to embed.
         """
         if tokenizer_dir is None:
             return
@@ -222,20 +224,13 @@ class GGUFExporter(Exporter):
                 except Exception:  # pragma: no cover - defensive
                     pass
 
-            # Chat template. Persist the Jinja string so single-file GGUF
-            # consumers (Flatrun ``--model file.gguf``, LM Studio) render
-            # prompts with the exact training format instead of a generic
-            # fallback (e.g. Qwen2 ChatML).
-            tokenizer_config = Path(tokenizer_dir) / "tokenizer_config.json"
-            if tokenizer_config.is_file():
-                try:
-                    with open(tokenizer_config, encoding="utf-8") as f:
-                        tc = json.load(f)
-                    chat_template = tc.get("chat_template")
-                    if isinstance(chat_template, str) and chat_template.strip():
-                        writer.add_string("tokenizer.chat_template", chat_template)
-                except Exception:  # pragma: no cover - defensive
-                    pass
+            # Chat template. Generate from the export config so the
+            # system-prompt injection (default system when caller omits
+            # a system message) is always baked in, regardless of what
+            # the source tokenizer_config.json contains.
+            if config is not None and config.chat_template.system is not None:
+                tmpl = build_chat_template(config.chat_template)
+                writer.add_string("tokenizer.chat_template", to_flatrun_jinja(tmpl))
 
             # Token types (1 = NORMAL, 3 = CONTROL/SPECIAL, 4 = USER_DEFINED,
             # 6 = BYTE) following the canonical GGML/llama.cpp convention.
@@ -388,7 +383,7 @@ class GGUFExporter(Exporter):
         tokenizer_source = tokenizer_dir
         if tokenizer_source is None and config is not None:
             tokenizer_source = getattr(config, "tokenizer_path", None)
-        self._embed_bpe_tokenizer(writer, tokenizer_source)
+        self._embed_bpe_tokenizer(writer, tokenizer_source, config)
 
         writer.write_header_to_file()
         writer.write_kv_data_to_file()
