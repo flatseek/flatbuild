@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 
-import torch
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
 

@@ -34,4 +34,10 @@ env/
 .idea/
 .vscode/
 .DS_Store
+
+# Test / temp exports
 test.hf/
+test.gguf/
+scripts/
+main.log
+*.gguf

@@ -478,6 +478,150 @@ def export(
 
 
 # ---------------------------------------------------------------------------
+# quantize
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.argument("input_file", type=click.Path(exists=True))
+@click.argument("output_file", type=click.Path())
+@click.option(
+    "--quant",
+    "-q",
+    "quant",
+    default="Q4_0",
+    show_default=True,
+    help="Quantization type: Q4_0, Q4_1, Q5_0, Q5_1, Q8_0 (K-quants not supported by gguf-python).",
+)
+def quantize(
+    input_file: str,
+    output_file: str,
+    quant: str,
+) -> None:
+    """Quantize an existing GGUF or SafeTensors file to a new GGUF.
+
+    INPUT_FILE is the path to an existing GGUF or SafeTensors file.
+    OUTPUT_FILE is the destination path for the quantized GGUF.
+
+    Supported quant types: Q4_0, Q4_1, Q5_0, Q5_1, Q8_0.
+    K-quants (Q2_K, Q4_K, Q8_K, ...) are not yet supported by gguf-python.
+
+    Examples:
+
+        flatbuild quantize model.gguf model-q4_0.gguf --quant Q4_0
+        flatbuild quantize model.gguf model-f16.gguf --quant F16
+        flatbuild quantize model.safetensors model-q8_0.gguf --quant Q8_0
+    """
+    import torch
+
+    setup_logging("quantize")
+    input_path = Path(input_file)
+    output_path = Path(output_file)
+
+    state_dict: dict[str, torch.Tensor] = {}
+    model_config: dict = {}
+    tokenizer_path: str | None = None
+
+    if input_path.suffix == ".gguf":
+        from flatbuild.exporters._gguf_reader import load_gguf_state_dict
+
+        state_dict, model_config = load_gguf_state_dict(input_path)
+        # Try to find tokenizer next to the GGUF.
+        for sibling in input_path.parent.iterdir():
+            if sibling.name == "tokenizer_config.json":
+                tokenizer_path = str(input_path.parent)
+                break
+
+    elif input_path.suffix in {".safetensors", ".bin"}:
+        try:
+            from safetensors.torch import load_file as _load_safetensors
+        except ImportError as exc:
+            raise click.ClickException(
+                "safetensors not installed. Run: pip install safetensors"
+            ) from exc
+
+        state_dict = _load_safetensors(input_path)
+        # When quantising a safetensors checkpoint the caller must provide
+        # a companion config so we know the model architecture.  If a
+        # config.json lives next to the safetensors file, reuse it.
+        sibling_config = input_path.parent / "config.json"
+        if sibling_config.exists():
+            import json
+
+            with open(sibling_config, encoding="utf-8") as f:
+                cfg_data = json.load(f)
+            model_config = {
+                "n_layers": cfg_data.get("num_hidden_layers", 4),
+                "n_heads": cfg_data.get("num_attention_heads", 4),
+                "hidden_dim": cfg_data.get("hidden_size", 256),
+                "n_kv_heads": cfg_data.get("num_key_value_heads"),
+                "context_length": cfg_data.get("max_position_embeddings", 256),
+                "rope_theta": cfg_data.get("rope_theta", 10000.0),
+            }
+            # Try to find tokenizer next to the safetensors/config.
+            for sibling in input_path.parent.iterdir():
+                if sibling.name == "tokenizer_config.json":
+                    tokenizer_path = str(input_path.parent)
+                    break
+        else:
+            raise click.ClickException(
+                f"No config.json found next to {input_path}. "
+                "Quantizing safetensors requires model architecture info. "
+                "Export from flatbuild first (flatbuild export ...) to get a "
+                "config.json, or provide one manually."
+            )
+    else:
+        raise click.ClickException(
+            f"Unsupported file type: {input_path.suffix}. "
+            "Expected .gguf or .safetensors"
+        )
+
+    if not state_dict:
+        raise click.ClickException("No tensors loaded — cannot quantise empty model.")
+
+    # Build a minimal ModelConfig and ExportConfig for the exporter.
+    from flatbuild.config import ExportConfig, ModelConfig
+
+    mcfg = ModelConfig(
+        vocab_size=state_dict.get("model.embed_tokens.weight", torch.zeros(1)).shape[1],
+        n_layers=model_config.get("n_layers", 4),
+        n_heads=model_config.get("n_heads", 4),
+        n_kv_heads=model_config.get("n_kv_heads") or max(1, model_config.get("n_heads", 4) // 2),
+        hidden_dim=model_config.get("hidden_dim", 256),
+        ffn_dim=model_config.get("ffn_dim"),
+        context_length=model_config.get("context_length", 256),
+        rope_theta=float(model_config.get("rope_theta", 10000.0)),
+    )
+
+    # Build a wrapper class so we can pass to GGUFExporter.export().
+    class _ExportModel:
+        config = mcfg
+        n_params = sum(t.numel() for t in state_dict.values())
+
+        def state_dict_llama(self) -> dict:
+            return state_dict
+
+        def parameters(self):
+            return state_dict.values()
+
+    export_model = _ExportModel()
+
+    export_cfg = ExportConfig(
+        quant=quant,
+        tokenizer_path=tokenizer_path,
+    )
+
+    from flatbuild.exporters.gguf import GGUFExporter
+
+    exporter = GGUFExporter(copy_tokenizer=bool(tokenizer_path))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    out_dir = exporter.export(
+        export_model, output_path, config=export_cfg
+    )
+    click.echo(f"[quantize] Wrote {out_dir / output_path.name}")
+
+
+# ---------------------------------------------------------------------------
 # generate
 # ---------------------------------------------------------------------------
 

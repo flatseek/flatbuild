@@ -166,7 +166,6 @@ class FWGExporter(Exporter):
             n_kv = cfg.n_kv_heads or max(1, cfg.n_heads // 2)
             try:
                 # Some flatweight versions expose ``metadata`` as a dict attribute.
-                from flatweight.core import WeightFSManifest  # type: ignore[attr-defined]
 
                 if isinstance(manifest.metadata, dict):
                     manifest.metadata.update(

@@ -1,9 +1,0 @@
-{
-  "tokenizer_class": "FlatbuildBPETokenizer",
-  "eos_token": "<|endoftext|>",
-  "bos_token": "<|bos|>",
-  "pad_token": "<|pad|>",
-  "unk_token": "<|unk|>",
-  "vocab_size": 516,
-  "chat_template": "{% for message in messages %}{{ ('' if (message['role']=='assistant' and message['content']=='') else (message['content'] + '<|endoftext|>' if message['role']=='system' else ('\\n\\n<|user|>\\n' + message['content'] if message['role']=='user' else '\\n\\n<|assistant|>\\n' + message['content'] + '<|endoftext|>'))) }}{% endfor %}{% if add_generation_prompt %}{{ ('\\n\\n<|assistant|>\\n') }}{% endif %}"
-}

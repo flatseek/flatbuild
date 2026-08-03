@@ -25,7 +25,6 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from torch import nn
 
 from flatbuild.callbacks.base import (
     Callback,
@@ -38,7 +37,7 @@ from flatbuild.models import FlatbuildModel
 from flatbuild.optimizers.factory import build_optimizer
 from flatbuild.schedulers.factory import build_scheduler
 from flatbuild.tokenizers.bpe import Tokenizer
-from flatbuild.tokenizers.template import ChatTemplate, build_chat_template
+from flatbuild.tokenizers.template import build_chat_template
 from flatbuild.trainer.datamodule import DataLoaderConfig, build_dataloader
 from flatbuild.trainer.profiler import PerformanceProfiler
 from flatbuild.trainer.progress import ProgressReporter
