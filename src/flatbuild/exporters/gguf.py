@@ -288,7 +288,7 @@ class GGUFExporter(Exporter):
         """
         try:
             from gguf import GGUFWriter, GGMLQuantizationType
-            from gguf.quants import GGML_QUANT_SIZES
+            from gguf.quants import GGML_QUANT_SIZES, quantize
         except ImportError as exc:  # pragma: no cover - optional dep
             raise ImportError(
                 "GGUF export requires the optional dependency `gguf`. "
@@ -308,6 +308,25 @@ class GGUFExporter(Exporter):
         # can also pass it as ExportConfig.quant. Defaults to F16.
         quant_name = getattr(config, "quant", None) or "f16"
         quant_type, is_quantized = _resolve_quant_type(quant_name, GGMLQuantizationType)
+
+        # gguf-python only implements legacy quants (Q4_0, Q4_1, Q5_0, Q5_1,
+        # Q8_0). K-quants (Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, Q8_K) are not yet
+        # implemented. Fail fast with a clear message rather than silently
+        # writing raw F32 data.
+        if is_quantized:
+            import numpy as np  # noqa: F401 - runtime use only in this block
+            from gguf.quants import quantize as _q_check
+
+            test_arr = np.zeros((256, 256), dtype=np.float32)
+            try:
+                _q_check(test_arr, quant_type)
+            except NotImplementedError as exc:
+                raise ValueError(
+                    f"Quantization '{quant_name}' is not yet implemented in "
+                    f"the installed gguf-python version. "
+                    f"Supported quant types: Q4_0, Q4_1, Q5_0, Q5_1, Q8_0. "
+                    f"Use --quant Q4_0 or --quant Q8_0 instead."
+                ) from exc
 
         writer = GGUFWriter(str(out_path), arch="llama")
         # The ``arch="llama"`` constructor already inserts
@@ -342,13 +361,16 @@ class GGUFExporter(Exporter):
         # Register a clear per-file quant label so llama.cpp reports it.
         writer.add_uint32("general.quantized", int(is_quantized))
 
-        # Tensor transport: flatten weights and, when quantizing, hand the
-        # raw F32 buffer to gguf with the target dtype so it quantizes
-        # per-tensor. Like llama.cpp, keep a tensor on F16 when its leading
-        # dimension isn't a multiple of the quant block size (e.g. small
-        # embedding/norm tensors), since GGUF block quantisation requires it.
+        # Tensor transport: flatten weights and, when quantizing, call
+        # ``gguf.quants.quantize()`` explicitly (the ``raw_dtype`` parameter
+        # on add_tensor is only metadata — it does not quantize the data).
+        # Like llama.cpp, keep a tensor on F16 when its last axis isn't a
+        # multiple of the quant block size (e.g. vocab embeddings with
+        # non-block-aligned sizes, norm tensors with odd shapes).
         fallback_dtype = GGMLQuantizationType.F16
         block_size = GGML_QUANT_SIZES[quant_type][0] if is_quantized else 0
+        quantized_count = 0
+        fallback_count = 0
         for name, tensor in state_dict.items():
             flat_t = tensor.detach().contiguous().cpu()
             arr = flat_t.numpy().astype("float32", copy=False)
@@ -360,20 +382,25 @@ class GGUFExporter(Exporter):
                 n_head = cfg.n_heads
                 n_head_kv = getattr(cfg, "n_kv_heads", n_head)
                 arr = _permute_qk(arr, n_head, n_head_kv)
-            # GGUF block quantisation applies along the last axis, so that
-            # must be a multiple of the quant block size to be quantizable.
             last = arr.shape[-1]
             if is_quantized and last % block_size == 0:
-                raw_dtype = quant_type
+                # Apply the quantization explicitly — add_tensor raw_dtype is
+                # only metadata, not the actual quantisation step.
+                arr = quantize(arr, quant_type)
+                writer.add_tensor(gguf_name, arr, raw_dtype=quant_type)
+                quantized_count += 1
             elif is_quantized:
-                logger.info(
-                    f"Tensor {name} last-dim={last} not a multiple of "
-                    f"{block_size}; keeping F16."
-                )
-                raw_dtype = fallback_dtype
+                # Tensor shape incompatible with this quant's block size;
+                # fall back to F16.
+                writer.add_tensor(gguf_name, arr, raw_dtype=fallback_dtype)
+                fallback_count += 1
             else:
-                raw_dtype = None
-            writer.add_tensor(gguf_name, arr, raw_dtype=raw_dtype)
+                writer.add_tensor(gguf_name, arr)
+        if is_quantized:
+            logger.info(
+                f"Quantized {quantized_count} tensors, "
+                f"{fallback_count} fallback F16 (block_size={block_size})."
+            )
 
         # Embed the BPE tokenizer (vocab + merges + special tokens)
         # directly into the GGUF file so the export is fully

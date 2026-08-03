@@ -113,7 +113,7 @@ def test_gguf_metadata_params_publisher_name(tmp_path):
 
 
 def test_gguf_quant_falls_back_unquantizable(tmp_path):
-    """Quantized export keeps F16 tensors whose last dim isn't a block multiple."""
+    """Unsupported K-quants raise a clear ValueError; supported quants quantize."""
     pytest.importorskip("gguf")
     from gguf import GGUFReader
 
@@ -122,10 +122,20 @@ def test_gguf_quant_falls_back_unquantizable(tmp_path):
     cfg = _tiny_config()
     cfg.export = ExportConfig(quant="q4_k")
     model = FlatbuildModel(cfg.model)
-    out = GGUFExporter(copy_tokenizer=False).export(model, tmp_path / "out", config=cfg.export)
+    # K-quants (q4_k, q8_k, q2_k, ...) are not implemented in gguf-python;
+    # verify a clear error is raised rather than silent F32 fallback.
+    with pytest.raises(ValueError, match="not yet implemented"):
+        GGUFExporter(copy_tokenizer=False).export(
+            model, tmp_path / "out", config=cfg.export
+        )
+
+    # Also verify the supported Q4_0 quantizes successfully (hidden_dim=32
+    # is a multiple of the Q4_0 block size 32, so all large tensors quantize).
+    cfg.export = ExportConfig(quant="q4_0")
+    out = GGUFExporter(copy_tokenizer=False).export(
+        model, tmp_path / "out", config=cfg.export
+    )
     reader = GGUFReader(str(out / "model.gguf"))
-    # hidden_dim=32 is not a multiple of q4_k block (256); all stay F16 but
-    # the file must remain loadable and carry the quant label.
     assert int(reader.fields["general.quantized"].parts[-1].tolist()[0]) == 1
 
 
