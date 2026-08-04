@@ -187,7 +187,10 @@ class FlatbuildTrainer:
         wall_start = time.perf_counter()
 
         try:
-            start_epoch = self.epoch_index if self.epoch_index > 0 or self.global_step > 0 else 0
+            if self.epoch_index > 0 or self.global_step > 0:
+                start_epoch = self.epoch_index + 1  # resume from next epoch
+            else:
+                start_epoch = 0
             for epoch in range(start_epoch, max(1, int(self.config.trainer.epochs))):
                 if self._stop_training:
                     break
