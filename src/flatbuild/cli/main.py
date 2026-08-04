@@ -299,9 +299,12 @@ def resume(checkpoint: str, config_file: Optional[str]) -> None:
     """Resume training from a saved checkpoint."""
     setup_logging("resume")
     bundle = CheckpointManager.load(checkpoint)
-    cfg: FlatBuildConfig = bundle["config"] or (
-        FlatBuildConfig.from_yaml(config_file) if config_file else None
-    )
+    if config_file:
+        cfg = FlatBuildConfig.from_yaml(config_file)
+    else:
+        cfg = bundle["config"]
+        if cfg is None:
+            raise click.ClickException("No config.yaml in checkpoint; pass --config")
     if cfg is None:
         raise click.ClickException("No config.yaml in checkpoint; pass --config")
 
