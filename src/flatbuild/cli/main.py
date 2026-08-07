@@ -233,20 +233,21 @@ def train(config_file: str, profile: bool) -> None:
     from flatbuild.config import TokenizerSource
 
     tok_dir = run_dir / "tokenizer"
-    bin_cache = run_dir / "tokenized.bin"
-    meta_cache = run_dir / "tokenized.meta.json"
-    
-    # Check if resuming with different dataset
-    old_dataset_path = bundle.get("dataset_path", "") if bundle else ""
-    new_dataset_path = str(cfg.dataset.path)
-    dataset_changed = old_dataset_path and old_dataset_path != new_dataset_path
 
     if cfg.tokenizer.source == TokenizerSource.TRAIN:
         from flatbuild.tokenizers.template import build_chat_template, to_flatrun_jinja
 
-        if dataset_changed:
-            logger.warning(f"Dataset changed from '{old_dataset_path}' to '{new_dataset_path}'")
-            logger.info("Retraining tokenizer with new dataset...")
+        if tok_dir.exists() and (tok_dir / "tokenizer.json").exists():
+            try:
+                tok = BPETokenizer.load(tok_dir)
+                logger.info(f"Loaded existing tokenizer from {tok_dir}")
+            except Exception:
+                tok = None
+        else:
+            tok = None
+
+        if tok is None:
+            logger.info(f"Training new tokenizer on {len(splits.train)} samples...")
             tok = BPETokenizer.train(
                 (s.text if hasattr(s, "text") else _render_for_bpe(s, cfg) for s in splits.train),
                 vocab_size=cfg.tokenizer.vocab_size,
