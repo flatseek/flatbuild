@@ -98,6 +98,7 @@ class CheckpointManager:
         tokenizer_dir: Path | None,
         config: FlatBuildConfig,
         state: CheckpointState,
+        dataset_path: str | None = None,
     ) -> Path:
         """Save a numbered step checkpoint.
 
@@ -132,7 +133,10 @@ class CheckpointManager:
                 shutil.rmtree(target)
             shutil.copytree(Path(tokenizer_dir), target)
         config.to_yaml(step_dir / "config.yaml")
-        write_json(step_dir / "trainer_state.json", state.to_dict())
+        state_dict = state.to_dict()
+        if dataset_path:
+            state_dict["dataset_path"] = dataset_path
+        write_json(step_dir / "trainer_state.json", state_dict)
 
         self._step_dirs.append(step_dir)
         if len(self._step_dirs) > self.max_to_keep:
@@ -149,6 +153,7 @@ class CheckpointManager:
         tokenizer_dir: Path | None,
         config: FlatBuildConfig,
         state: CheckpointState,
+        dataset_path: str | None = None,
     ) -> Path:
         """Save the ``final/`` checkpoint (always retained)."""
         self.final_dir.mkdir(parents=True, exist_ok=True)
@@ -172,7 +177,10 @@ class CheckpointManager:
                 shutil.rmtree(target)
             shutil.copytree(Path(tokenizer_dir), target)
         config.to_yaml(self.final_dir / "config.yaml")
-        write_json(self.final_dir / "trainer_state.json", state.to_dict())
+        state_dict = state.to_dict()
+        if dataset_path:
+            state_dict["dataset_path"] = dataset_path
+        write_json(self.final_dir / "trainer_state.json", state_dict)
         # Refresh ``history.json`` with the latest metrics view.
         history_path = self.run_dir / "history.json"
         if history_path.exists():
@@ -222,6 +230,8 @@ class CheckpointManager:
             state = CheckpointState()
 
         tok_dir = directory / "tokenizer"
+        # Get dataset_path from state.extra if present
+        dataset_path = state.extra.get("dataset_path") if state.extra else None
         return {
             "model_state_dict": sd,
             "optimizer_state": optimizer_state,
@@ -229,6 +239,7 @@ class CheckpointManager:
             "config": config,
             "state": state,
             "directory": directory,
+            "dataset_path": dataset_path,
         }
 
 

@@ -589,6 +589,7 @@ class FlatbuildTrainer:
             tokenizer_dir=self.run_dir / "tokenizer",
             config=self.config,
             state=self.state,
+            dataset_path=str(self.config.dataset.path) if self.config.dataset.path else None,
         )
         logger.info(f"Saved final checkpoint to {path}")
 
@@ -613,6 +614,7 @@ class FlatbuildTrainer:
                 tokenizer_dir=self.run_dir / "tokenizer",
                 config=self.config,
                 state=self.state,
+                dataset_path=str(self.config.dataset.path) if self.config.dataset.path else None,
             )
 
     def _shutdown_executor(self) -> None:
