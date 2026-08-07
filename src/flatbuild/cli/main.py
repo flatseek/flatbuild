@@ -27,6 +27,7 @@ from flatbuild.exporters.safetensors import SafeTensorsExporter
 from flatbuild.models import FlatbuildModel
 from flatbuild.tokenizers.bpe import BPETokenizer
 from flatbuild.trainer.trainer import FlatbuildTrainer, build_callbacks
+from flatbuild.trainer.default_callbacks import GenerationCallback
 from flatbuild.utils import (
     create_run_folder,
     get_logger,
@@ -299,6 +300,17 @@ def train(config_file: str, profile: bool) -> None:
     # 3. Build model + trainer + train.
     model = FlatbuildModel(cfg.model)
     callbacks = build_callbacks(cfg, run_dir)
+    # Add generation callback for post-epoch inspection
+    if cfg.generate.prompt:
+        callbacks.append(
+            GenerationCallback(
+                model=model,
+                tokenizer=tok,
+                prompts=[cfg.generate.prompt],
+                max_new_tokens=cfg.generate.max_new_tokens,
+                temperature=cfg.generate.temperature,
+            )
+        )
     trainer = FlatbuildTrainer(
         config=cfg,
         model=model,
