@@ -315,6 +315,10 @@ def resume(checkpoint: str, config_file: Optional[str]) -> None:
     if tok is None:
         raise click.ClickException("Checkpoint has no tokenizer — cannot resume.")
 
+    # Override vocab_size from tokenizer to match checkpoint
+    cfg.model.vocab_size = tok.vocab_size
+    cfg.tokenizer.vocab_size = tok.vocab_size
+
     run_dir = Path(checkpoint).parent
     model = FlatbuildModel(cfg.model)
     model.load_state_dict_llama(bundle["model_state_dict"], strict=False)
