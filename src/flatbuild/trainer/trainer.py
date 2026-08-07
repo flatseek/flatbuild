@@ -329,8 +329,14 @@ class FlatbuildTrainer:
         wall_start = time.perf_counter()
 
         try:
-            if self.epoch_index > 0 or self.global_step > 0:
-                start_epoch = self.epoch_index + 1  # resume from next epoch
+            # Recalculate epoch from global_step (don't trust saved epoch_index)
+            batch_size = max(1, int(self.config.trainer.batch_size))
+            grad_accum = max(1, int(self.config.trainer.gradient_accumulation))
+            steps_per_epoch = max(1, math.ceil(len(self.samples) / (batch_size * grad_accum)))
+            if self.global_step > 0 and steps_per_epoch > 0:
+                current_epoch = self.global_step // steps_per_epoch
+                start_epoch = current_epoch + 1
+                logger.info(f"Resuming from step {self.global_step} (epoch {current_epoch})")
             else:
                 start_epoch = 0
             for epoch in range(start_epoch, max(1, int(self.config.trainer.epochs))):
