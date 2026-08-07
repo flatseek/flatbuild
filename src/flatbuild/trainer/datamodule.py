@@ -62,6 +62,26 @@ class DataLoaderConfig:
     drop_last: bool = True
 
 
+class _CollateFn:
+    """Picklable collate function holder for multiprocessing."""
+
+    def __init__(self, pad_token_id: int):
+        self.pad_token_id = pad_token_id
+
+    def __call__(self, batch: list[tuple[Tensor, Tensor]]) -> tuple[Tensor, Tensor]:
+        if not batch:
+            return torch.empty(0, dtype=torch.long), torch.empty(0, dtype=torch.long)
+        max_len = max(len(pair[0]) for pair in batch)
+        pad = int(self.pad_token_id or 0)
+        ids = torch.full((len(batch), max_len), pad, dtype=torch.long)
+        labels = torch.full((len(batch), max_len), -100, dtype=torch.long)
+        for row_idx, (ids_row, labels_row) in enumerate(batch):
+            n = ids_row.numel()
+            ids[row_idx, :n] = ids_row
+            labels[row_idx, :n] = labels_row
+        return ids, labels
+
+
 def build_dataloader(
     tokenized_rows: Sequence[tuple[list[int], list[int]]],
     *,
@@ -84,31 +104,11 @@ def build_dataloader(
     """
     cfg = config or DataLoaderConfig()
 
-    def _collate(batch: list[tuple[Tensor, Tensor]]) -> tuple[Tensor, Tensor]:
-        """Pad a list of variable-length tokenized rows into a batch.
-
-        Building tensors from a Python list via ``torch.tensor`` with
-        right-padding is faster than per-row ``torch.full`` calls.
-        """
-        if not batch:
-            return torch.empty(0, dtype=torch.long), torch.empty(0, dtype=torch.long)
-        max_len = max(len(pair[0]) for pair in batch)
-        pad = int(pad_token_id or 0)
-        ids = torch.full((len(batch), max_len), pad, dtype=torch.long)
-        labels = torch.full((len(batch), max_len), -100, dtype=torch.long)
-        for row_idx, (ids_row, labels_row) in enumerate(batch):
-            n = ids_row.numel()
-            ids[row_idx, :n] = ids_row
-            labels[row_idx, :n] = labels_row
-        return ids, labels
-
-    # Worker count > 0 requires sample-multiprocessing which fails for
-    # in-process closures; the dataclass is already picklable.
     dataset = TokenizedTensorDataset(tokenized_rows)
     kwargs: dict = dict(
         batch_size=batch_size,
         shuffle=shuffle,
-        collate_fn=_collate,
+        collate_fn=_CollateFn(pad_token_id),
         num_workers=cfg.num_workers,
         pin_memory=cfg.pin_memory,
         drop_last=cfg.drop_last,

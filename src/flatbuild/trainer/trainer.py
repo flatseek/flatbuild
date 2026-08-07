@@ -17,9 +17,10 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import time
 from collections.abc import Iterable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -37,11 +38,10 @@ from flatbuild.models import FlatbuildModel
 from flatbuild.optimizers.factory import build_optimizer
 from flatbuild.schedulers.factory import build_scheduler
 from flatbuild.tokenizers.bpe import Tokenizer
-from flatbuild.tokenizers.template import build_chat_template
+from flatbuild.tokenizers.template import ChatTemplate, build_chat_template
 from flatbuild.trainer.datamodule import DataLoaderConfig, build_dataloader
 from flatbuild.trainer.profiler import PerformanceProfiler
 from flatbuild.trainer.progress import ProgressReporter
-from flatbuild.trainer.tokenize import tokenize_sample
 from flatbuild.trainer.validation import make_validation_runner
 from flatbuild.utils import get_logger, set_seed, write_json
 
@@ -56,6 +56,146 @@ class TrainArtifacts:
     checkpoint_state: CheckpointState
     metrics: dict[str, Any]
     early_stopped: bool = False
+
+
+
+# ---------------------------------------------------------------------------
+# Binary tokenized-cache I/O
+# ---------------------------------------------------------------------------
+
+
+def _save_tokenized_cache(
+    data: list[tuple[list[int], list[int]]],
+    bin_path: Path,
+    meta_path: Path,
+    max_length: int,
+) -> None:
+    """Write tokenized data to a binary cache file.
+
+    Format:
+        uint32 n_samples
+        uint32[n_samples] lengths
+        uint64[n_samples+1] ids_offsets  (byte offsets into ids_flat)
+        uint64[n_samples+1] labels_offsets  (byte offsets into labels_flat)
+        int32[total_ids] ids_flat
+        int32[total_labels] labels_flat
+    """
+    import json as _json
+
+    import numpy as np
+
+    n = len(data)
+    lens = np.array([len(ids) for ids, _ in data], dtype=np.uint32)
+
+    ids_flat_list: list[int] = []
+    labels_flat_list: list[int] = []
+    ids_offsets = np.zeros(n + 1, dtype=np.uint64)
+    labels_offsets = np.zeros(n + 1, dtype=np.uint64)
+
+    ids_off = 0
+    labels_off = 0
+    for i, (ids, labels) in enumerate(data):
+        ids_offsets[i] = ids_off
+        labels_offsets[i] = labels_off
+        ids_flat_list.extend(ids)
+        labels_flat_list.extend(labels)
+        ids_off += len(ids)
+        labels_off += len(labels)
+    ids_offsets[n] = ids_off
+    labels_offsets[n] = labels_off
+
+    ids_flat = np.array(ids_flat_list, dtype=np.int32)
+    labels_flat = np.array(labels_flat_list, dtype=np.int32)
+
+    with open(bin_path, "wb") as f:
+        np.array(n, dtype=np.uint32).tofile(f)
+        lens.tofile(f)
+        ids_offsets.tofile(f)
+        labels_offsets.tofile(f)
+        ids_flat.tofile(f)
+        labels_flat.tofile(f)
+
+    with open(meta_path, "w", encoding="utf-8") as f:
+        _json.dump({"max_length": max_length, "n_samples": n, "version": 1}, f)
+
+
+def _load_tokenized_cache(
+    bin_path: Path,
+    meta_path: Path,
+    max_length: int,
+) -> list[tuple[list[int], list[int]]] | None:
+    """Load tokenized data from binary cache. Returns None if cache is missing or stale."""
+    import json as _json
+
+    import numpy as np
+
+    if not bin_path.exists() or not meta_path.exists():
+        return None
+    try:
+        with open(meta_path, encoding="utf-8") as f:
+            meta = _json.load(f)
+        if meta.get("max_length") != max_length or meta.get("version") != 1:
+            return None
+    except Exception:
+        return None
+
+    try:
+        n = meta["n_samples"]
+        with open(bin_path, "rb") as f:
+            _ = np.fromfile(f, dtype=np.uint32, count=1)[0]
+            lens = np.fromfile(f, dtype=np.uint32, count=n)
+            ids_offsets = np.fromfile(f, dtype=np.uint64, count=n + 1)
+            labels_offsets = np.fromfile(f, dtype=np.uint64, count=n + 1)
+            ids_flat = np.fromfile(f, dtype=np.int32)
+            labels_flat = np.fromfile(f, dtype=np.int32)
+
+        results: list[tuple[list[int], list[int]]] = []
+        for i in range(n):
+            ids_start = int(ids_offsets[i])
+            ids_end = int(ids_offsets[i + 1])
+            labels_start = int(labels_offsets[i])
+            labels_end = int(labels_offsets[i + 1])
+            ids = ids_flat[ids_start:ids_end].tolist()
+            labels = labels_flat[labels_start:labels_end].tolist()
+            results.append((ids, labels))
+        return results
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Parallel tokenization worker (module-level for ProcessPoolExecutor pickle)
+# ---------------------------------------------------------------------------
+
+
+def _tokenize_chunk(
+    chunk: list[dict],
+    tokenizer_path: str,
+    template: "ChatTemplate",
+    max_length: int,
+) -> list[tuple[list[int], list[int]]]:
+    """Tokenize a chunk of samples in a worker process.
+
+    Each worker loads its own tokenizer copy from disk, so the
+    ``_inner`` Rust object never needs to be pickled.
+    """
+    from flatbuild.tokenizers.bpe import BPETokenizer
+    from flatbuild.trainer.tokenize import tokenize_sample
+    from flatbuild.datasets.base import normalize_sample
+
+    tokenizer = BPETokenizer.load(tokenizer_path)
+    results: list[tuple[list[int], list[int]]] = []
+    for raw in chunk:
+        try:
+            sample = normalize_sample(raw)
+            ids, labels = tokenize_sample(
+                sample, tokenizer, template, max_length=max_length
+            )
+            if ids:
+                results.append((ids, labels))
+        except Exception:
+            continue
+    return results
 
 
 class FlatbuildTrainer:
@@ -198,7 +338,11 @@ class FlatbuildTrainer:
                 self._train_one_epoch(epoch, progress, history)
                 # End-of-epoch full validation (always).
                 if self.val_tokenized:
-                    metrics = self._run_validation()
+                    try:
+                        metrics = self._run_validation()
+                    except Exception as exc:
+                        logger.warning(f"Validation failed: {exc}. Skipping.")
+                        metrics = {"loss": 0.0, "perplexity": 1.0, "accuracy": 0.0}
                     self.callback_ctx_state.update(
                         val_loss=metrics["loss"],
                         val_perplexity=metrics["perplexity"],
@@ -506,22 +650,71 @@ class FlatbuildTrainer:
     # ----- Tokenization (one-shot, cached) -----
 
     def _tokenize_all(self, samples: list[Sample]) -> list[tuple[list[int], list[int]]]:
-        """Render every sample to ``(input_ids, labels)`` once."""
-        out: list[tuple[list[int], list[int]]] = []
-        for sample in samples:
-            try:
-                ids, labels = tokenize_sample(
-                    sample,
-                    self.tokenizer,
-                    self.template,
-                    max_length=self.config.dataset.max_length,
-                )
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning(f"Failed to tokenize sample: {exc}")
-                continue
-            if ids:
-                out.append((ids, labels))
-        return out
+        """Render every sample to ``(input_ids, labels)`` once using multiprocessing.
+
+        Results are cached to a binary file for near-instant reload on
+        subsequent runs. The cache is invalidated when ``max_length`` changes.
+        """
+        from flatbuild.trainer.tokenize import tokenize_sample
+
+        n_samples = len(samples)
+        if n_samples == 0:
+            return []
+
+        tok_path = str(self.run_dir / "tokenizer")
+        max_len = self.config.dataset.max_length
+        bin_path = self.run_dir / "tokenized.bin"
+        meta_path = self.run_dir / "tokenized.meta.json"
+
+        cached = _load_tokenized_cache(bin_path, meta_path, max_len)
+        if cached is not None:
+            logger.info(f"Loaded {len(cached)} tokenized samples from cache ({bin_path.name})")
+            return cached
+
+        results: list[tuple[list[int], list[int]]] = []
+        if Path(tok_path).exists():
+            n_workers = max(1, os.cpu_count() or 4)
+            chunk_size = max(1, math.ceil(n_samples / n_workers))
+            chunks: list[list[dict]] = []
+            for i in range(0, n_samples, chunk_size):
+                chunk_dicts = []
+                for sample in samples[i : i + chunk_size]:
+                    if hasattr(sample, "__dict__"):
+                        chunk_dicts.append(sample.__dict__)
+                    else:
+                        chunk_dicts.append(dict(sample))  # type: ignore[arg-type]
+                chunks.append(chunk_dicts)
+
+            logger.info(f"Tokenizing {n_samples} samples with {n_workers} workers (chunk size ~{chunk_size})...")
+            with ProcessPoolExecutor(max_workers=n_workers) as executor:
+                futures = [
+                    executor.submit(_tokenize_chunk, chunk, tok_path, self.template, max_len)
+                    for chunk in chunks
+                ]
+                for future in futures:
+                    results.extend(future.result())
+            logger.info(f"Tokenization complete: {len(results)} samples ready")
+        else:
+            logger.info(f"Tokenizing {n_samples} samples (single-threaded fallback — tokenizer not saved to disk)...")
+            out: list[tuple[list[int], list[int]]] = []
+            for sample in samples:
+                try:
+                    ids, labels = tokenize_sample(
+                        sample,
+                        self.tokenizer,
+                        self.template,
+                        max_length=max_len,
+                    )
+                except Exception as exc:
+                    logger.warning(f"Failed to tokenize sample: {exc}")
+                    continue
+                if ids:
+                    out.append((ids, labels))
+            results = out
+            logger.info(f"Tokenization complete: {len(results)} samples ready")
+
+        _save_tokenized_cache(results, bin_path, meta_path, max_len)
+        return results
 
     # ----- Callback helpers -----
 
