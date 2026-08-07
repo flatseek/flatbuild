@@ -319,7 +319,13 @@ def resume(checkpoint: str, config_file: Optional[str]) -> None:
     cfg.model.vocab_size = tok.vocab_size
     cfg.tokenizer.vocab_size = tok.vocab_size
 
-    run_dir = Path(checkpoint).parent
+    # Get the run_dir (parent of checkpoints folder)
+    checkpoint_path = Path(checkpoint)
+    if checkpoint_path.name in ("final",) or checkpoint_path.name.startswith("step-"):
+        # Checkpoint is inside checkpoints/ subfolder
+        run_dir = checkpoint_path.parent.parent
+    else:
+        run_dir = checkpoint_path.parent
     # Ensure tokenizer is saved to disk for parallel tokenization workers
     tok.save(run_dir / "tokenizer")
 
