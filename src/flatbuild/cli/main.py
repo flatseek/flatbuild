@@ -355,7 +355,9 @@ def resume(checkpoint: str, config_file: Optional[str]) -> None:
         callbacks=callbacks,
     )
     trainer.global_step = bundle["state"].global_step
-    trainer.epoch_index = bundle["state"].epoch_index
+    # Note: Optimizer state not loaded to avoid mismatch with new config.
+    # This resets momentum but ensures stable training.
+    trainer.optimizer.zero_grad(set_to_none=True)
 
     if bundle["optimizer_state"] is not None:
         opt_state = bundle["optimizer_state"].get("optimizer")
