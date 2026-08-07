@@ -31,7 +31,7 @@ class GenerationCallback(Callback):
         print("Sample generations:")
         print("=" * 60)
         for prompt in self.prompts[:3]:
-            input_ids = self.tokenizer.encode(prompt, add_special_tokens=True)
+            input_ids = self.tokenizer.encode(prompt)
             input_tensor = torch.tensor([input_ids], dtype=torch.long)
             with torch.no_grad():
                 output_ids = self.model.generate(
@@ -39,7 +39,7 @@ class GenerationCallback(Callback):
                     max_new_tokens=self.max_new_tokens,
                     temperature=self.temperature,
                 )
-            generated = self.tokenizer.decode(output_ids[0].tolist(), skip_special_tokens=True)
+            generated = self.tokenizer.decode(output_ids[0].tolist())
             print(f"\n[Prompt]: {prompt}")
             print(f"[Output]: {generated[:200]}...")
         print("=" * 60 + "\n")
