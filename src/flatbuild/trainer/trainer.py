@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import json
 import math
+import multiprocessing
 import os
+import sys
 import time
 from collections.abc import Iterable
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
@@ -673,8 +675,10 @@ class FlatbuildTrainer:
 
         results: list[tuple[list[int], list[int]]] = []
         if Path(tok_path).exists():
-            n_workers = max(1, os.cpu_count() or 4)
-            chunk_size = max(1, math.ceil(n_samples / n_workers))
+            # Use more workers for tokenization (CPU-bound, doesn't compete with GPU training)
+            # Cap at 8 to avoid excessive memory usage
+            n_workers = min(8, max(2, os.cpu_count() or 4))
+            chunk_size = max(100, math.ceil(n_samples / n_workers))
             chunks: list[list[dict]] = []
             for i in range(0, n_samples, chunk_size):
                 chunk_dicts = []
@@ -686,7 +690,11 @@ class FlatbuildTrainer:
                 chunks.append(chunk_dicts)
 
             logger.info(f"Tokenizing {n_samples} samples with {n_workers} workers (chunk size ~{chunk_size})...")
-            with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            # Use 'fork' on Linux for faster worker startup (avoids pickle overhead)
+            ctx = None
+            if sys.platform != "darwin":
+                ctx = multiprocessing.get_context("fork")
+            with ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as executor:
                 futures = [
                     executor.submit(_tokenize_chunk, chunk, tok_path, self.template, max_len)
                     for chunk in chunks
