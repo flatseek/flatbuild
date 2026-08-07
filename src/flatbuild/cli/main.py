@@ -398,6 +398,17 @@ def resume(checkpoint: str, config_file: Optional[str]) -> None:
         seed=cfg.dataset.seed,
     )
     callbacks = build_callbacks(cfg, run_dir)
+    # Add generation callback for post-epoch inspection
+    if cfg.generate.prompt:
+        callbacks.append(
+            GenerationCallback(
+                model=model,
+                tokenizer=tok,
+                prompts=[cfg.generate.prompt],
+                max_new_tokens=cfg.generate.max_new_tokens,
+                temperature=cfg.generate.temperature,
+            )
+        )
     trainer = FlatbuildTrainer(
         config=cfg,
         model=model,
