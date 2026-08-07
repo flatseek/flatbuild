@@ -235,14 +235,26 @@ def train(config_file: str, profile: bool) -> None:
     if cfg.tokenizer.source == TokenizerSource.TRAIN:
         from flatbuild.tokenizers.template import build_chat_template, to_flatrun_jinja
 
-        tok = BPETokenizer.train(
-            (s.text if hasattr(s, "text") else _render_for_bpe(s, cfg) for s in splits.train),
-            vocab_size=cfg.tokenizer.vocab_size,
-            min_frequency=cfg.tokenizer.min_frequency,
-            added_tokens=cfg.tokenizer.added_tokens,
-            save_to=tok_dir,
-            chat_template=to_flatrun_jinja(build_chat_template(cfg.chat_template)),
-        )
+        # Reuse existing tokenizer if compatible
+        if tok_dir.exists() and (tok_dir / "tokenizer.json").exists():
+            try:
+                tok = BPETokenizer.load(tok_dir)
+                logger.info(f"Loaded existing tokenizer from {tok_dir}")
+            except Exception:
+                tok = None
+        else:
+            tok = None
+
+        if tok is None:
+            logger.info(f"Training new tokenizer on {len(splits.train)} samples...")
+            tok = BPETokenizer.train(
+                (s.text if hasattr(s, "text") else _render_for_bpe(s, cfg) for s in splits.train),
+                vocab_size=cfg.tokenizer.vocab_size,
+                min_frequency=cfg.tokenizer.min_frequency,
+                added_tokens=cfg.tokenizer.added_tokens,
+                save_to=tok_dir,
+                chat_template=to_flatrun_jinja(build_chat_template(cfg.chat_template)),
+            )
     else:
         if not cfg.tokenizer.path:
             raise click.ClickException("tokenizer.source=load requires tokenizer.path")
