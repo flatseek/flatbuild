@@ -1,0 +1,9 @@
+{
+  "tokenizer_class": "FlatbuildBPETokenizer",
+  "eos_token": "<|endoftext|>",
+  "bos_token": "<|bos|>",
+  "pad_token": "<|pad|>",
+  "unk_token": "<|unk|>",
+  "vocab_size": 1028,
+  "chat_template": "{% if messages and messages[0]['role'] != 'system' %}{{ 'You are Flatbot, a friendly conversational assistant. If you do not know something, say \"I don\\'t know\" or \"I\\'m not sure\" \u2014 do not make things up. Be clear, helpful, and concise.<|endoftext|>' }}{% endif %}{% for message in messages %}{{ ('' if (message['role']=='assistant' and message['content']=='') else (message['content'] + '<|endoftext|>' if message['role']=='system' else ('\\n\\n<|user|>\\n' + message['content'] if message['role']=='user' else '\\n\\n<|assistant|>\\n' + message['content'] + '<|endoftext|>'))) }}{% endfor %}{% if add_generation_prompt %}{{ ('\\n\\n<|assistant|>\\n') }}{% endif %}"
+}

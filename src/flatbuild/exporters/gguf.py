@@ -337,6 +337,8 @@ class GGUFExporter(Exporter):
         writer.add_block_count(cfg.n_layers)
         writer.add_head_count(cfg.n_heads)
         writer.add_head_count_kv(cfg.n_kv_heads or max(1, cfg.n_heads // 2))
+        head_dim = int(getattr(cfg, "head_dim", cfg.hidden_dim // cfg.n_heads))
+        writer.add_key_length(head_dim)
         writer.add_rope_freq_base(cfg.rope_theta)
         writer.add_layer_norm_rms_eps(1e-6)
         export_name = (
@@ -360,6 +362,9 @@ class GGUFExporter(Exporter):
             writer.add_string("general.publisher", publisher)
         # Register a clear per-file quant label so llama.cpp reports it.
         writer.add_uint32("general.quantized", int(is_quantized))
+        # flatbuild uses half-split (NEOX) RoPE format internally.
+        # Export to GGUF without permutation - flatrun reads rope_interleaved from metadata.
+        writer.add_string("general.rope_format", "half-split")
 
         # Tensor transport: flatten weights and, when quantizing, call
         # ``gguf.quants.quantize()`` explicitly (the ``raw_dtype`` parameter
@@ -375,23 +380,14 @@ class GGUFExporter(Exporter):
             flat_t = tensor.detach().contiguous().cpu()
             arr = flat_t.numpy().astype("float32", copy=False)
             gguf_name = _hf_to_gguf_name(name)
-            if gguf_name.endswith(("attn_q.weight", "attn_k.weight")):
-                # HF-layout Q/K pair head dims as (i, i + head_dim/2);
-                # the llama arch expects interleaved layout. Apply the
-                # same permutation llama.cpp's convert_hf_to_gguf.py uses.
-                n_head = cfg.n_heads
-                n_head_kv = getattr(cfg, "n_kv_heads", n_head)
-                arr = _permute_qk(arr, n_head, n_head_kv)
+            # NOTE: flatbuild uses half-split (NEOX) RoPE internally.
+            # No permutation applied here - weights stay in HF format.
             last = arr.shape[-1]
             if is_quantized and last % block_size == 0:
-                # Apply the quantization explicitly — add_tensor raw_dtype is
-                # only metadata, not the actual quantisation step.
                 arr = quantize(arr, quant_type)
                 writer.add_tensor(gguf_name, arr, raw_dtype=quant_type)
                 quantized_count += 1
             elif is_quantized:
-                # Tensor shape incompatible with this quant's block size;
-                # fall back to F16.
                 writer.add_tensor(gguf_name, arr, raw_dtype=fallback_dtype)
                 fallback_count += 1
             else:

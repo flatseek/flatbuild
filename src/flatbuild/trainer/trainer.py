@@ -768,15 +768,22 @@ class FlatbuildTrainer:
                 ):
                     best[key] = v
 
-        summary = (
-            self.evaluate()
-            if self.val_tokenized
-            else {
+        if self.val_tokenized:
+            try:
+                summary = self.evaluate()
+            except Exception as exc:
+                logger.warning(f"Final evaluation failed: {exc}. Skipping.")
+                summary = {
+                    "loss": self.last_loss or 0.0,
+                    "perplexity": math.exp(self.last_loss) if self.last_loss else 1.0,
+                    "accuracy": 0.0,
+                }
+        else:
+            summary = {
                 "loss": self.last_loss or 0.0,
                 "perplexity": math.exp(self.last_loss) if self.last_loss else 1.0,
                 "accuracy": 0.0,
             }
-        )
         return {
             "elapsed_seconds": round(elapsed, 1),
             "epochs": self.epoch_index + 1,

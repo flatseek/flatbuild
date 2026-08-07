@@ -252,6 +252,9 @@ def train(config_file: str, profile: bool) -> None:
     if cfg.model.vocab_size <= 0:
         raise click.ClickException("Tokenizer has zero vocab — corpus too small?")
 
+    # Save tokenizer to disk BEFORE trainer init so parallel tokenization workers can load it.
+    tok.save(run_dir / "tokenizer")
+
     # 3. Build model + trainer + train.
     model = FlatbuildModel(cfg.model)
     callbacks = build_callbacks(cfg, run_dir)
@@ -509,6 +512,11 @@ def quantize(
     Supported quant types: Q4_0, Q4_1, Q5_0, Q5_1, Q8_0.
     K-quants (Q2_K, Q4_K, Q8_K, ...) are not yet supported by gguf-python.
 
+    NOTE: gguf-python's quantize implementation has known issues. For
+    production use, always use llama.cpp's llama-quantize instead:
+
+        llama-quantize model-f16.gguf model-q4_0.gguf Q4_0
+
     Examples:
 
         flatbuild quantize model.gguf model-q4_0.gguf --quant Q4_0
@@ -609,17 +617,13 @@ def quantize(
 
     export_model = _ExportModel()
 
-    export_cfg = ExportConfig(
-        quant=quant,
-        tokenizer_path=tokenizer_path,
-    )
+    export_cfg = ExportConfig(quant=quant)
 
     from flatbuild.exporters.gguf import GGUFExporter
 
-    exporter = GGUFExporter(copy_tokenizer=bool(tokenizer_path))
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    out_dir = exporter.export(
-        export_model, output_path, config=export_cfg
+    out_dir = GGUFExporter().export(
+        export_model, output_path, config=export_cfg, tokenizer_dir=tokenizer_path
     )
     click.echo(f"[quantize] Wrote {out_dir / output_path.name}")
 

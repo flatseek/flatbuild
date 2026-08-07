@@ -146,7 +146,10 @@ def load_gguf_state_dict(
             # Read raw bytes at the stored offset into the correct dtype.
             raw_bytes = gguf_path.read_bytes()[tensor.data_offset : tensor.data_offset + tensor.n_bytes]
             arr = np.frombuffer(raw_bytes, dtype=dtype).reshape(tensor.shape)
-            state_dict[hf_name] = torch.from_numpy(arr)
+            # GGUF stores embedding/lm_head as (hidden, vocab), PyTorch/HF uses (vocab, hidden)
+            if hf_name in ("model.embed_tokens.weight", "lm_head.weight"):
+                arr = arr.T.copy()
+            state_dict[hf_name] = torch.from_numpy(arr.copy())
         except Exception as exc:
             logger.warning(f"Skipping tensor {tensor.name}: {exc}")
             skipped += 1
