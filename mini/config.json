@@ -1,8 +1,0 @@
-{
-  "format": "gguf",
-  "gguf_path": "model.gguf",
-  "model_type": "llama",
-  "hidden_size": 512,
-  "num_attention_heads": 16,
-  "num_hidden_layers": 12
-}
