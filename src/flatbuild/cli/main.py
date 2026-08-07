@@ -320,6 +320,9 @@ def resume(checkpoint: str, config_file: Optional[str]) -> None:
     cfg.tokenizer.vocab_size = tok.vocab_size
 
     run_dir = Path(checkpoint).parent
+    # Ensure tokenizer is saved to disk for parallel tokenization workers
+    tok.save(run_dir / "tokenizer")
+
     model = FlatbuildModel(cfg.model)
     model.load_state_dict_llama(bundle["model_state_dict"], strict=False)
 
