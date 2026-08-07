@@ -78,7 +78,9 @@ class _CollateFn:
         for row_idx, (ids_row, labels_row) in enumerate(batch):
             n = ids_row.numel()
             ids[row_idx, :n] = ids_row
-            labels[row_idx, :n] = labels_row
+            labels_n = labels_row.numel()
+            if labels_n > 0:
+                labels[row_idx, :labels_n] = labels_row
         return ids, labels
 
 
