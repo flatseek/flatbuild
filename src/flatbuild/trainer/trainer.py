@@ -148,8 +148,11 @@ def _load_tokenized_cache(
             lens = np.fromfile(f, dtype=np.uint32, count=n)
             ids_offsets = np.fromfile(f, dtype=np.uint64, count=n + 1)
             labels_offsets = np.fromfile(f, dtype=np.uint64, count=n + 1)
-            ids_flat = np.fromfile(f, dtype=np.int32)
-            labels_flat = np.fromfile(f, dtype=np.int32)
+            all_ints = np.fromfile(f, dtype=np.int32)
+
+        ids_total = int(ids_offsets[-1])
+        ids_flat = all_ints[:ids_total]
+        labels_flat = all_ints[ids_total:]
 
         results: list[tuple[list[int], list[int]]] = []
         for i in range(n):
