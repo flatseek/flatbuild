@@ -365,10 +365,10 @@ class FlatbuildTrainer:
                     )
                 if self.config.checkpoint.save_final:
                     self._save_final()
+                # Post-epoch callbacks (generation, etc) after checkpoint saved
+                self._fire("on_epoch_end")
                 if self._stop_training:
                     break
-            if self.config.checkpoint.save_final:
-                self._save_final()
         finally:
             self._fire("on_train_end")
             self._write_history(history)
