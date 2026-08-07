@@ -76,9 +76,16 @@ class LanguageModelingMetrics:
 
     def summary(self) -> dict[str, float]:
         """Return ``{loss, perplexity, accuracy}`` as plain floats."""
-        avg_loss = sum(self.losses) / max(1, len(self.losses))
+        valid_losses = [l for l in self.losses if l == l]  # filter NaN
+        if not valid_losses:
+            return {
+                "loss": float("nan"),
+                "perplexity": 1.0,
+                "accuracy": 0.0,
+            }
+        avg_loss = sum(valid_losses) / len(valid_losses)
         return {
             "loss": avg_loss,
-            "perplexity": compute_perplexity(self.losses),
+            "perplexity": compute_perplexity(valid_losses),
             "accuracy": self.correct / self.total if self.total else 0.0,
         }
