@@ -256,36 +256,6 @@ def train(config_file: str, profile: bool) -> None:
                 save_to=tok_dir,
                 chat_template=to_flatrun_jinja(build_chat_template(cfg.chat_template)),
             )
-            # Invalidate cache since tokenizer changed
-            if bin_cache.exists():
-                bin_cache.unlink()
-            if meta_cache.exists():
-                meta_cache.unlink()
-            logger.info(f"Tokenizer retrained and cache invalidated")
-        elif tok_dir.exists() and (tok_dir / "tokenizer.json").exists():
-            try:
-                tok = BPETokenizer.load(tok_dir)
-                logger.info(f"Loaded existing tokenizer from {tok_dir}")
-            except Exception:
-                logger.warning(f"Failed to load tokenizer, retraining...")
-                tok = BPETokenizer.train(
-                    (s.text if hasattr(s, "text") else _render_for_bpe(s, cfg) for s in splits.train),
-                    vocab_size=cfg.tokenizer.vocab_size,
-                    min_frequency=cfg.tokenizer.min_frequency,
-                    added_tokens=cfg.tokenizer.added_tokens,
-                    save_to=tok_dir,
-                    chat_template=to_flatrun_jinja(build_chat_template(cfg.chat_template)),
-                )
-        else:
-            logger.info(f"Training new tokenizer on {len(splits.train)} samples...")
-            tok = BPETokenizer.train(
-                (s.text if hasattr(s, "text") else _render_for_bpe(s, cfg) for s in splits.train),
-                vocab_size=cfg.tokenizer.vocab_size,
-                min_frequency=cfg.tokenizer.min_frequency,
-                added_tokens=cfg.tokenizer.added_tokens,
-                save_to=tok_dir,
-                chat_template=to_flatrun_jinja(build_chat_template(cfg.chat_template)),
-            )
     else:
         if not cfg.tokenizer.path:
             raise click.ClickException("tokenizer.source=load requires tokenizer.path")
